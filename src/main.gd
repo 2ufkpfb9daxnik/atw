@@ -520,6 +520,7 @@ func load_app_settings() -> void:
 		if has_ui_node("font_size_spinbox"):
 			(ui_node("font_size_spinbox") as SpinBox).value = ui_font_size
 		apply_ui_font_size()
+		setup_key_guide()
 		refresh_ui()
 
 	var saved_layout_path: String = String(data.get("layout_path", "")).strip_edges()
@@ -792,6 +793,7 @@ func _on_countdown_spinbox_value_changed(_value: float) -> void:
 func _on_font_size_spinbox_value_changed(value: float) -> void:
 	ui_font_size = maxi(int(round(value)), 8)
 	apply_ui_font_size()
+	setup_key_guide()
 	refresh_ui()
 
 # タイマー選択UI（1分/1時間/自由設定）を初期化する。
@@ -1549,13 +1551,19 @@ func setup_key_guide() -> void:
 	if root == null:
 		return
 
+	var key_width := get_key_guide_key_size()
+	var key_height := key_width
+	var key_gap := get_key_guide_gap()
+	var row_gap := get_key_guide_row_gap()
+	root.custom_minimum_size.y = (key_height * 5.0) + (row_gap * 4.0)
+
 	for child in root.get_children():
 		child.queue_free()
 	key_guide_keys.clear()
 
 	var outer := VBoxContainer.new()
 	outer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	outer.add_theme_constant_override("separation", 6)
+	outer.add_theme_constant_override("separation", row_gap)
 	root.add_child(outer)
 
 	# 各キーは [token, width_units]。正方形は width_units=1。
@@ -1610,9 +1618,6 @@ func setup_key_guide() -> void:
 		],
 	]
 
-	var key_height := 28.0
-	var key_width := 28.0
-	var key_gap := 4
 	for row_data in rows:
 		var row_offset_units := float(row_data[0])
 		var row_center := bool(row_data[1])
@@ -1663,6 +1668,18 @@ func setup_key_guide() -> void:
 			row.add_child(key_rect)
 
 	refresh_key_guide()
+
+# フォントサイズに応じたキーガイドの基準キーサイズを返す。
+func get_key_guide_key_size() -> float:
+	return clampf(float(ui_font_size) + 4.0, 18.0, 64.0)
+
+# キー同士の横隙間を返す。
+func get_key_guide_gap() -> int:
+	return maxi(int(round(get_key_guide_key_size() * 0.16)), 3)
+
+# 段と段の縦隙間を返す。
+func get_key_guide_row_gap() -> int:
+	return maxi(int(round(get_key_guide_key_size() * 0.22)), 4)
 
 # 1つ分のキーガイド矩形を生成して辞書へ登録する。
 func create_key_guide_rect(token: String, width: float, height: float) -> ColorRect:
