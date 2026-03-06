@@ -288,7 +288,7 @@ func _on_change_layout_button_pressed() -> void:
 		setup_layout_file_dialog()
 	if layout_file_dialog == null:
 		return
-	layout_file_dialog.current_dir = "res://layouts"
+	layout_file_dialog.current_dir = get_dialog_initial_dir(current_layout_path)
 	layout_file_dialog.popup_centered_ratio(0.7)
 
 # お題変更ボタン押下でお題選択ダイアログを開く。
@@ -297,8 +297,18 @@ func _on_change_odai_button_pressed() -> void:
 		setup_odai_file_dialog()
 	if odai_file_dialog == null:
 		return
-	odai_file_dialog.current_dir = "res://odai"
+	odai_file_dialog.current_dir = get_dialog_initial_dir(current_odai_path)
 	odai_file_dialog.popup_centered_ratio(0.7)
+
+# 設定ダイアログの初期ディレクトリを返す。
+func get_dialog_initial_dir(current_path: String) -> String:
+	if current_path.is_empty():
+		return ProjectSettings.globalize_path("res://")
+	if current_path.begins_with("res://") or current_path.begins_with("user://"):
+		var global := ProjectSettings.globalize_path(current_path)
+		if not global.is_empty():
+			return global.get_base_dir()
+	return current_path.get_base_dir()
 
 # 背景画像変更ボタン押下で画像選択ダイアログを開く。
 func _on_change_background_button_pressed() -> void:
@@ -314,11 +324,11 @@ func setup_layout_file_dialog() -> void:
 		return
 
 	layout_file_dialog = FileDialog.new()
-	layout_file_dialog.access = FileDialog.ACCESS_RESOURCES
+	layout_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	layout_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	layout_file_dialog.use_native_dialog = true
 	layout_file_dialog.title = "配列を選択"
-	layout_file_dialog.current_dir = "res://layouts"
+	layout_file_dialog.current_dir = get_dialog_initial_dir(current_layout_path)
 	layout_file_dialog.add_filter("*.json", "JSON Layout")
 	layout_file_dialog.file_selected.connect(_on_layout_file_selected)
 	add_child(layout_file_dialog)
@@ -329,11 +339,11 @@ func setup_odai_file_dialog() -> void:
 		return
 
 	odai_file_dialog = FileDialog.new()
-	odai_file_dialog.access = FileDialog.ACCESS_RESOURCES
+	odai_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	odai_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	odai_file_dialog.use_native_dialog = true
 	odai_file_dialog.title = "お題ファイルを選択"
-	odai_file_dialog.current_dir = "res://odai"
+	odai_file_dialog.current_dir = get_dialog_initial_dir(current_odai_path)
 	odai_file_dialog.add_filter("*.txt", "Text Odai")
 	odai_file_dialog.file_selected.connect(_on_odai_file_selected)
 	add_child(odai_file_dialog)
@@ -451,6 +461,7 @@ func save_app_settings() -> void:
 	var data: Dictionary = {
 		"layout_path": current_layout_path,
 		"odai_path": current_odai_path,
+		"ui_font_size": ui_font_size,
 		"background_path": current_background_path,
 		"background_is_video": current_background_is_video,
 	}
@@ -476,6 +487,14 @@ func load_app_settings() -> void:
 	if not (parsed_result is Dictionary):
 		return
 	var data: Dictionary = parsed_result as Dictionary
+
+	var saved_font_size := int(data.get("ui_font_size", ui_font_size))
+	if saved_font_size >= 8:
+		ui_font_size = saved_font_size
+		if has_ui_node("font_size_spinbox"):
+			(ui_node("font_size_spinbox") as SpinBox).value = ui_font_size
+		apply_ui_font_size()
+		refresh_ui()
 
 	var saved_layout_path: String = String(data.get("layout_path", "")).strip_edges()
 	if not saved_layout_path.is_empty() and FileAccess.file_exists(saved_layout_path):
