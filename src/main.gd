@@ -60,6 +60,13 @@ var used_odai_unique_lines: Array[String] = []
 var used_odai_line_order: Array[int] = []
 var ui_font_size := 25
 var current_background_is_video := false
+var stream_version := 0
+var stream_reachability_cache: Dictionary = {}
+var stream_next_valid_keys_cache: Dictionary = {}
+var stream_prompt_cache: Dictionary = {}
+var target_flow_labels: Array[Label] = []
+var hiragana_labels: Array[Label] = []
+var history_labels: Array[Label] = []
 
 # main_ui 配下のノードを名前で再帰検索して返す。
 func ui_node(name: String) -> Node:
@@ -184,7 +191,7 @@ func _process(delta: float) -> void:
 		miss_timer -= delta
 		if miss_timer <= 0.0:
 			miss_timer = 0.0
-			refresh_ui()
+			refresh_ui_light_no_cursor()
 
 # キー入力を受け取り、1文字入力として判定処理に渡す。
 func _input(event: InputEvent) -> void:
@@ -584,6 +591,7 @@ func apply_layout_file(path: String) -> bool:
 
 	current_layout_path = path
 	table = build_table(rules)
+	invalidate_stream_caches()
 	sentence_cache.clear()
 	reset_prompts()
 	update_layout_label()
@@ -604,6 +612,13 @@ func apply_odai_file(path: String) -> bool:
 	update_odai_label()
 	save_app_settings()
 	return true
+
+# ストリーム依存キャッシュを無効化する。
+func invalidate_stream_caches() -> void:
+	stream_version += 1
+	stream_reachability_cache.clear()
+	stream_next_valid_keys_cache.clear()
+	stream_prompt_cache.clear()
 
 # レイアウトJSONが state/input/output/next_state を持つ配列か検証する。
 func validate_layout_rules(path: String, rules: Array) -> bool:
@@ -1231,6 +1246,7 @@ func init_stream() -> void:
 
 # ゲーム進行に関する可変状態を初期値に戻す。
 func reset_state() -> void:
+	invalidate_stream_caches()
 	kana_stream = ""
 	kanji_stream = ""
 	kana_to_kanji = [0]
@@ -1358,6 +1374,7 @@ func append_sentence_data(data: Dictionary) -> void:
 		"kanji_start": kanji_start,
 		"kanji_end": kanji_stream.length(),
 	})
+	invalidate_stream_caches()
 
 # 1文字入力を状態機械で正誤判定し、遷移可能なら進行させる。
 func check_input(input_char: String) -> void:
@@ -1368,22 +1385,28 @@ func check_input_candidates(input_candidates: Array[String]) -> void:
 	if table.is_empty():
 		return
 	
-	ensure_lookahead()
+	if stream_cursor >= kana_stream.length():
+		ensure_lookahead()
 	if stream_cursor >= kana_stream.length():
 		return
 	if input_candidates.is_empty():
 		return
 
 	var expected_kana := ""
-	if stream_cursor < kana_stream.length():
-		expected_kana = kana_stream[stream_cursor]
 	var expected_target := ""
-	var target_idx := get_caret_index_in_kanji(stream_cursor)
-	if target_idx >= 0 and target_idx < kanji_stream.length():
-		expected_target = kanji_stream[target_idx]
-	var snap_target3 := get_hbox_visible_text(ui_node("target_text3"))
-	var snap_hiragana := get_hbox_visible_text(ui_node("hiragana_box"))
-	var snap_history := get_hbox_visible_text(ui_node("history_box"))
+	var snap_target3 := ""
+	var snap_hiragana := ""
+	var snap_history := ""
+	var should_log := timer_running and round_start_msec > 0
+	if should_log:
+		if stream_cursor < kana_stream.length():
+			expected_kana = kana_stream[stream_cursor]
+		var target_idx := get_caret_index_in_kanji(stream_cursor)
+		if target_idx >= 0 and target_idx < kanji_stream.length():
+			expected_target = kanji_stream[target_idx]
+		snap_target3 = get_hbox_visible_text(ui_node("target_text3"))
+		snap_hiragana = get_hbox_visible_text(ui_node("hiragana_box"))
+		snap_history = get_hbox_visible_text(ui_node("history_box"))
 
 	var transitions: Dictionary = table.get(current_state, {})
 	var miss_key := input_candidates[0]
@@ -1405,7 +1428,7 @@ func check_input_candidates(input_candidates: Array[String]) -> void:
 		var next_pos := stream_cursor + output.length()
 		# Empty-output transitions can be traps (e.g. default->k when next kana is not k*).
 		# Treat those as miss so the game never enters an unwinnable state.
-		if not can_type_text_from(kana_stream, next_state, next_pos):
+		if not can_type_from_stream_cached(next_state, next_pos):
 			miss_reason = "dead_end"
 			miss_key = input_char
 			continue
@@ -1469,7 +1492,7 @@ func on_correct(input_char: String, transition: Dictionary, output: String) -> v
 func on_miss(_input_char: String) -> void:
 	miss_count += 1
 	miss_timer = MISS_FLASH_TIME
-	refresh_ui()
+	refresh_ui_light_no_cursor()
 
 # 現在カーソル位置で遷移出力文字列が一致するか判定する。
 func output_matches_at(output: String, cursor: int) -> bool:
@@ -1487,6 +1510,13 @@ func refresh_ui() -> void:
 	update_hiragana_box()
 	update_history_box()
 	align_input_boxes_to_target_caret()
+
+# カーソルが進まない更新向け（次お題再構築と再アラインを省略）。
+func refresh_ui_light_no_cursor() -> void:
+	update_target_label()
+	update_target_flow_box()
+	update_hiragana_box()
+	update_history_box()
 
 # 現在お題のみを target_text に進捗ハイライト付きで表示する。
 func update_target_label() -> void:
@@ -1569,11 +1599,10 @@ func update_target_flow_box() -> void:
 		return
 	
 	var box := ui_node("target_text3") as HBoxContainer
-	for c in box.get_children():
-		c.queue_free()
 	
 	if kanji_stream.is_empty():
 		target_flow_caret_child_index = 0
+		set_label_pool_visible(target_flow_labels, 0)
 		return
 	
 	var caret := get_caret_index_in_kanji(stream_cursor)
@@ -1582,11 +1611,13 @@ func update_target_flow_box() -> void:
 	var miss_active := miss_timer > 0.0
 	if end <= start:
 		target_flow_caret_child_index = 0
+		set_label_pool_visible(target_flow_labels, 0)
 		return
 	target_flow_caret_child_index = clampi(caret - start, 0, end - start - 1)
 	
+	var used := 0
 	for i in range(start, end):
-		var label := Label.new()
+		var label := get_or_create_pool_label(box, target_flow_labels, used)
 		label.text = kanji_stream[i]
 		label.add_theme_font_size_override("font_size", ui_font_size)
 		
@@ -1598,8 +1629,9 @@ func update_target_flow_box() -> void:
 			label.modulate = Color.CYAN
 		else:
 			label.modulate = Color.WHITE
-		
-		box.add_child(label)
+		used += 1
+
+	set_label_pool_visible(target_flow_labels, used)
 
 # かなカーソル位置から現在お題チャンクのインデックスを返す。
 func get_current_chunk_index() -> int:
@@ -1617,11 +1649,10 @@ func update_hiragana_box() -> void:
 	var box := ui_node("hiragana_box") as HBoxContainer
 	if box == null:
 		return
-	for c in box.get_children():
-		c.queue_free()
 	
 	if kana_stream.is_empty():
 		hiragana_caret_child_index = 0
+		set_label_pool_visible(hiragana_labels, 0)
 		return
 	
 	var start := maxi(stream_cursor - max_items, 0)
@@ -1629,12 +1660,14 @@ func update_hiragana_box() -> void:
 	var miss_active := miss_timer > 0.0
 	if end <= start:
 		hiragana_caret_child_index = 0
+		set_label_pool_visible(hiragana_labels, 0)
 		return
 	hiragana_caret_child_index = clampi(stream_cursor - start, 0, end - start - 1)
 	
+	var used := 0
 	for i in range(start, end):
 		var ch := kana_stream[i]
-		var label := Label.new()
+		var label := get_or_create_pool_label(box, hiragana_labels, used)
 		label.text = "␣" if ch == " " else ch
 		label.add_theme_font_size_override("font_size", ui_font_size)
 		
@@ -1646,16 +1679,15 @@ func update_hiragana_box() -> void:
 			label.modulate = Color.CYAN
 		else:
 			label.modulate = Color.WHITE
-		
-		box.add_child(label)
+		used += 1
+
+	set_label_pool_visible(hiragana_labels, used)
 
 # 入力履歴と先読みプロンプトの表示ボックスを更新する。
 func update_history_box() -> void:
 	var box := ui_node("history_box") as HBoxContainer
 	if box == null:
 		return
-	for c in box.get_children():
-		c.queue_free()
 	
 	var history_start := maxi(typed_history.length() - max_items, 0)
 	var past := typed_history.substr(history_start, typed_history.length() - history_start)
@@ -1665,11 +1697,13 @@ func update_history_box() -> void:
 	var miss_active := miss_timer > 0.0
 	if combined.is_empty():
 		history_caret_child_index = 0
+		set_label_pool_visible(history_labels, 0)
 		return
 	history_caret_child_index = clampi(past.length(), 0, combined.length() - 1)
 	
+	var used := 0
 	for i in range(combined.length()):
-		var label := Label.new()
+		var label := get_or_create_pool_label(box, history_labels, used)
 		var ch := combined[i]
 		label.text = "␣" if ch == " " else ch
 		label.add_theme_font_size_override("font_size", ui_font_size)
@@ -1682,8 +1716,24 @@ func update_history_box() -> void:
 			label.modulate = Color.CYAN
 		else:
 			label.modulate = Color.WHITE
-		
+		used += 1
+
+	set_label_pool_visible(history_labels, used)
+
+# 指定インデックスのラベルをプールから取得し、足りなければ生成する。
+func get_or_create_pool_label(box: HBoxContainer, pool: Array[Label], index: int) -> Label:
+	while pool.size() <= index:
+		var label := Label.new()
+		pool.append(label)
 		box.add_child(label)
+	var result := pool[index]
+	result.visible = true
+	return result
+
+# プール済みラベルの表示/非表示を使用数に合わせて更新する。
+func set_label_pool_visible(pool: Array[Label], used_count: int) -> void:
+	for i in range(pool.size()):
+		pool[i].visible = i < used_count
 
 # HBox内の指定キャレット位置までの横幅を返す。
 func get_caret_x_in_hbox(box: HBoxContainer, caret_index: int) -> float:
@@ -1763,7 +1813,13 @@ func build_next_prompt(max_len: int) -> String:
 		return ""
 	
 	var target_end := mini(kana_stream.length(), stream_cursor + LOOKAHEAD_KANA)
-	var prompt := find_shortest_prompt(current_state, stream_cursor, target_end)
+	var cache_key := "%d|%s|%d|%d" % [stream_version, current_state, stream_cursor, target_end]
+	var prompt := ""
+	if stream_prompt_cache.has(cache_key):
+		prompt = String(stream_prompt_cache[cache_key])
+	else:
+		prompt = find_shortest_prompt(current_state, stream_cursor, target_end)
+		stream_prompt_cache[cache_key] = prompt
 	if prompt.length() > max_len:
 		return prompt.substr(0, max_len)
 	return prompt
@@ -1834,6 +1890,12 @@ func find_shortest_prompt(start_state: String, start_pos: int, target_pos: int) 
 
 # 現在状態・位置で有効かつ完走可能な次キー候補を返す。
 func get_next_valid_keys(state: String, pos: int) -> Array[String]:
+	var cache_key := "%d|%s|%d" % [stream_version, state, pos]
+	if stream_next_valid_keys_cache.has(cache_key):
+		var cached: Variant = stream_next_valid_keys_cache[cache_key]
+		if cached is Array[String]:
+			return cached
+
 	var keys: Array[String] = []
 	var transitions: Dictionary = table.get(state, {})
 	for input_key in transitions.keys():
@@ -1843,10 +1905,20 @@ func get_next_valid_keys(state: String, pos: int) -> Array[String]:
 			continue
 		var next_state := String(transition.get("next", "default"))
 		var next_pos := pos + output.length()
-		if can_type_text_from(kana_stream, next_state, next_pos):
+		if can_type_from_stream_cached(next_state, next_pos):
 			keys.append(String(input_key))
 	keys.sort()
+	stream_next_valid_keys_cache[cache_key] = keys
 	return keys
+
+# 現在の kana_stream に対する到達可能性をキャッシュ付きで返す。
+func can_type_from_stream_cached(start_state: String, start_pos: int) -> bool:
+	var cache_key := "%d|%s|%d" % [stream_version, start_state, start_pos]
+	if stream_reachability_cache.has(cache_key):
+		return bool(stream_reachability_cache[cache_key])
+	var ok := can_type_text_from(kana_stream, start_state, start_pos)
+	stream_reachability_cache[cache_key] = ok
+	return ok
 
 # かな全文が既定レイアウトで入力可能かを判定する。
 func can_type_kana(text: String) -> bool:
