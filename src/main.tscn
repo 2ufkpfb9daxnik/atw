@@ -1,0 +1,166 @@
+[gd_scene load_steps=3 format=3 uid="uid://bqw0pxspvpm1p"]
+
+[ext_resource type="PackedScene" uid="uid://don5uh8im1ii4" path="res://records.tscn" id="1_0xm2m"]
+[ext_resource type="Script" uid="uid://5o3ynyqttiue" path="res://main.gd" id="1_1bvp3"]
+
+[node name="Main" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_1bvp3")
+
+[node name="Records" parent="." instance=ExtResource("1_0xm2m")]
+layout_mode = 1
+
+[node name="background_texture" type="TextureRect" parent="."]
+z_index = -100
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="background_video" type="VideoStreamPlayer" parent="."]
+visible = false
+z_index = -99
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="main_ui" type="Control" parent="."]
+anchors_preset = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="layout_root" type="MarginContainer" parent="main_ui"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 12
+
+[node name="main_hbox" type="HBoxContainer" parent="main_ui/layout_root"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 16
+
+[node name="left_panel" type="VBoxContainer" parent="main_ui/layout_root/main_hbox"]
+custom_minimum_size = Vector2(240, 0)
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="records_button" type="Button" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+text = "記録"
+
+[node name="start_button" type="Button" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+text = "開始"
+
+[node name="exit_button" type="Button" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+text = "終了"
+
+[node name="timer_mode_option" type="OptionButton" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+
+[node name="custom_time_spinbox" type="SpinBox" parent="main_ui/layout_root/main_hbox/left_panel"]
+visible = false
+layout_mode = 2
+
+[node name="countdown_label" type="RichTextLabel" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+text = "カウントダウン"
+fit_content = true
+
+[node name="countdown_spinbox" type="SpinBox" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+
+[node name="change_layout" type="Button" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+text = "配列変更"
+
+[node name="layout_label" type="RichTextLabel" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+fit_content = true
+
+[node name="change_odai" type="Button" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+text = "お題変更"
+
+[node name="odai_label" type="RichTextLabel" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+fit_content = true
+
+[node name="font_size_label" type="RichTextLabel" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+text = "フォントサイズ"
+fit_content = true
+
+[node name="font_size_spinbox" type="SpinBox" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+
+[node name="change_background" type="Button" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+text = "背景画像変更"
+
+[node name="background_label" type="RichTextLabel" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+fit_content = true
+
+[node name="right_panel" type="VBoxContainer" parent="main_ui/layout_root/main_hbox"]
+clip_contents = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 4
+
+[node name="timer_label" type="RichTextLabel" parent="main_ui/layout_root/main_hbox/right_panel"]
+layout_mode = 2
+fit_content = true
+
+[node name="target_text2" type="RichTextLabel" parent="main_ui/layout_root/main_hbox/right_panel"]
+layout_mode = 2
+size_flags_horizontal = 3
+autowrap_mode = 0
+
+[node name="target_text" type="RichTextLabel" parent="main_ui/layout_root/main_hbox/right_panel"]
+layout_mode = 2
+size_flags_horizontal = 3
+autowrap_mode = 0
+
+[node name="target_text3" type="HBoxContainer" parent="main_ui/layout_root/main_hbox/right_panel"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="hiragana_box" type="HBoxContainer" parent="main_ui/layout_root/main_hbox/right_panel"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="history_box" type="HBoxContainer" parent="main_ui/layout_root/main_hbox/right_panel"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="measure_label" type="RichTextLabel" parent="main_ui/layout_root/main_hbox/right_panel"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/normal_font_size = 50
+text = "
+"
