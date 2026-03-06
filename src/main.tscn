@@ -158,6 +158,11 @@ theme_override_constants/separation = 0
 layout_mode = 2
 theme_override_constants/separation = 0
 
+[node name="key_guide_root" type="Control" parent="main_ui/layout_root/main_hbox/right_panel"]
+custom_minimum_size = Vector2(0, 230)
+layout_mode = 2
+size_flags_horizontal = 3
+
 [node name="measure_label" type="RichTextLabel" parent="main_ui/layout_root/main_hbox/right_panel"]
 layout_mode = 2
 size_flags_horizontal = 3

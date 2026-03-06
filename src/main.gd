@@ -69,6 +69,16 @@ var stream_reachability_ready := false
 var target_flow_labels: Array[Label] = []
 var hiragana_labels: Array[Label] = []
 var history_labels: Array[Label] = []
+var key_guide_keys: Dictionary = {}
+var key_guide_last_tokens: Array[String] = []
+var key_guide_last_ok := true
+var key_guide_flash_timer := 0.0
+
+const KEY_GUIDE_BASE_COLOR := Color(0.16, 0.18, 0.22, 0.86)
+const KEY_GUIDE_NEXT_COLOR := Color(0.95, 0.80, 0.24, 0.95)
+const KEY_GUIDE_PRIMARY_COLOR := Color(0.33, 0.88, 0.43, 0.96)
+const KEY_GUIDE_HIT_COLOR := Color(0.22, 0.55, 1.00, 0.97)
+const KEY_GUIDE_MISS_COLOR := Color(1.00, 0.31, 0.31, 0.97)
 
 # main_ui 配下のノードを名前で再帰検索して返す。
 func ui_node(name: String) -> Node:
@@ -125,6 +135,7 @@ func _ready() -> void:
 	setup_timer_mode_option()
 	setup_countdown_spinbox()
 	setup_font_size_spinbox()
+	setup_key_guide()
 	if has_ui_node("font_size_spinbox"):
 		(ui_node("font_size_spinbox") as SpinBox).value_changed.connect(_on_font_size_spinbox_value_changed)
 	update_custom_time_visibility()
@@ -194,6 +205,12 @@ func _process(delta: float) -> void:
 		if miss_timer <= 0.0:
 			miss_timer = 0.0
 			refresh_ui_light_no_cursor()
+
+	if key_guide_flash_timer > 0.0:
+		key_guide_flash_timer -= delta
+		if key_guide_flash_timer <= 0.0:
+			key_guide_flash_timer = 0.0
+			refresh_key_guide()
 
 # キー入力を受け取り、1文字入力として判定処理に渡す。
 func _input(event: InputEvent) -> void:
@@ -1266,6 +1283,8 @@ func reset_state() -> void:
 	used_odai_unique_lines.clear()
 	used_odai_line_order.clear()
 	miss_timer = 0.0
+	key_guide_last_tokens.clear()
+	key_guide_flash_timer = 0.0
 
 # 先読み不足がなくなるまでお題を追加する。
 func ensure_lookahead() -> void:
@@ -1476,6 +1495,7 @@ func get_hbox_visible_text(node: Node) -> String:
 
 # 正解入力時の履歴・状態・進捗更新を行う。
 func on_correct(input_char: String, transition: Dictionary, output: String) -> void:
+	set_key_guide_flash(input_char, true)
 	typed_history += input_char
 	current_state = String(transition.get("next", "default"))
 	
@@ -1491,7 +1511,8 @@ func on_correct(input_char: String, transition: Dictionary, output: String) -> v
 	refresh_ui()
 
 # ミス入力時のカウントと赤表示タイマー開始を行う。
-func on_miss(_input_char: String) -> void:
+func on_miss(input_char: String) -> void:
+	set_key_guide_flash(input_char, false)
 	miss_count += 1
 	miss_timer = MISS_FLASH_TIME
 	refresh_ui_light_no_cursor()
@@ -1511,6 +1532,7 @@ func refresh_ui() -> void:
 	update_target_flow_box()
 	update_hiragana_box()
 	update_history_box()
+	refresh_key_guide()
 	align_input_boxes_to_target_caret()
 
 # カーソルが進まない更新向け（次お題再構築と再アラインを省略）。
@@ -1519,6 +1541,227 @@ func refresh_ui_light_no_cursor() -> void:
 	update_target_flow_box()
 	update_hiragana_box()
 	update_history_box()
+	refresh_key_guide()
+
+# キーガイドを動的生成し、入力トークンとの対応表を初期化する。
+func setup_key_guide() -> void:
+	var root := ui_node("key_guide_root") as Control
+	if root == null:
+		return
+
+	for child in root.get_children():
+		child.queue_free()
+	key_guide_keys.clear()
+
+	var outer := VBoxContainer.new()
+	outer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	outer.add_theme_constant_override("separation", 6)
+	root.add_child(outer)
+
+	# 各キーは [token, width_units]。正方形は width_units=1。
+	# 各行は [offset_units, center_align, keys, protruding_shift]。
+	var rows: Array = [
+		[
+			0.0,
+			false,
+			[
+				["1", 1], ["2", 1], ["3", 1], ["4", 1], ["5", 1],
+				["6", 1], ["7", 1], ["8", 1], ["9", 1], ["0", 1],
+				["-", 1], ["^", 1],
+			],
+			false,
+		],
+		[
+			0.5,
+			false,
+			[
+				["q", 1], ["w", 1], ["e", 1], ["r", 1], ["t", 1],
+				["y", 1], ["u", 1], ["i", 1], ["o", 1], ["p", 1],
+				["@", 1], ["[", 1],
+			],
+			false,
+		],
+		[
+			0.75,
+			false,
+			[
+				["a", 1], ["s", 1], ["d", 1], ["f", 1], ["g", 1],
+				["h", 1], ["j", 1], ["k", 1], ["l", 1], [";", 1],
+				[":", 1], ["]", 1],
+			],
+			false,
+		],
+		[
+			1.5,
+			false,
+			[
+				["z", 1], ["x", 1], ["c", 1], ["v", 1], ["b", 1],
+				["n", 1], ["m", 1], [",", 1], [".", 1], ["/", 1],
+			],
+			true,
+		],
+		[
+			0.0,
+			true,
+			[
+				["space", 8.2],
+			],
+			false,
+		],
+	]
+
+	var key_height := 28.0
+	var key_width := 28.0
+	var key_gap := 4
+	for row_data in rows:
+		var row_offset_units := float(row_data[0])
+		var row_center := bool(row_data[1])
+		var row_keys: Array = row_data[2]
+		var protruding_shift := false
+		if row_data.size() >= 4:
+			protruding_shift = bool(row_data[3])
+
+		if protruding_shift:
+			var overlay := Control.new()
+			overlay.custom_minimum_size = Vector2(0.0, key_height)
+			overlay.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			outer.add_child(overlay)
+
+			var key_row := HBoxContainer.new()
+			key_row.position = Vector2(row_offset_units * key_width, 0.0)
+			key_row.add_theme_constant_override("separation", key_gap)
+			overlay.add_child(key_row)
+
+			for key_data in row_keys:
+				var token := String(key_data[0])
+				var width_units := float(key_data[1])
+				var key_rect := create_key_guide_rect(token, width_units * key_width, key_height)
+				key_row.add_child(key_rect)
+
+			var shift_width := 2.2 * key_width
+			var shift_rect := create_key_guide_rect("shift", shift_width, key_height)
+			shift_rect.position = Vector2(row_offset_units * key_width - shift_width - key_gap, 0.0)
+			overlay.add_child(shift_rect)
+			continue
+
+		var row := HBoxContainer.new()
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_theme_constant_override("separation", key_gap)
+		if row_center:
+			row.alignment = BoxContainer.ALIGNMENT_CENTER
+		outer.add_child(row)
+
+		if row_offset_units > 0.0:
+			var spacer := Control.new()
+			spacer.custom_minimum_size = Vector2(row_offset_units * key_width, key_height)
+			row.add_child(spacer)
+
+		for key_data in row_keys:
+			var token := String(key_data[0])
+			var width_units := float(key_data[1])
+			var key_rect := create_key_guide_rect(token, width_units * key_width, key_height)
+			row.add_child(key_rect)
+
+	refresh_key_guide()
+
+# 1つ分のキーガイド矩形を生成して辞書へ登録する。
+func create_key_guide_rect(token: String, width: float, height: float) -> ColorRect:
+	var rect := ColorRect.new()
+	rect.custom_minimum_size = Vector2(width, height)
+	rect.color = KEY_GUIDE_BASE_COLOR
+
+	key_guide_keys[token] = rect
+	return rect
+
+# 入力1回分の発光対象トークンと色を保存する。
+func set_key_guide_flash(input_token: String, ok: bool) -> void:
+	key_guide_last_tokens = to_guide_tokens(input_token)
+	key_guide_last_ok = ok
+	key_guide_flash_timer = MISS_FLASH_TIME
+
+# 現在状態に応じてキーガイド色を更新する。
+func refresh_key_guide() -> void:
+	if key_guide_keys.is_empty():
+		return
+
+	for token in key_guide_keys.keys():
+		var rect := key_guide_keys[token] as ColorRect
+		if rect != null:
+			rect.color = KEY_GUIDE_BASE_COLOR
+
+	if stream_cursor < kana_stream.length():
+		var valid_keys := get_next_valid_keys(current_state, stream_cursor)
+		for token in valid_keys:
+			for guide_token in to_guide_tokens(String(token)):
+				set_key_guide_color(guide_token, KEY_GUIDE_NEXT_COLOR)
+
+		if not valid_keys.is_empty():
+			for guide_token in to_guide_tokens(String(valid_keys[0])):
+				set_key_guide_color(guide_token, KEY_GUIDE_PRIMARY_COLOR)
+
+	if key_guide_flash_timer > 0.0 and not key_guide_last_tokens.is_empty():
+		var flash_color := KEY_GUIDE_HIT_COLOR if key_guide_last_ok else KEY_GUIDE_MISS_COLOR
+		for token in key_guide_last_tokens:
+			set_key_guide_color(token, flash_color)
+
+# 指定トークンに対応するキー矩形の色を設定する。
+func set_key_guide_color(token: String, color: Color) -> void:
+	if not key_guide_keys.has(token):
+		return
+	var rect := key_guide_keys[token] as ColorRect
+	if rect != null:
+		rect.color = color
+
+# レイアウト入力トークンをキーガイド上のキー集合へ変換する。
+func to_guide_tokens(input_token: String) -> Array[String]:
+	var token := input_token.strip_edges().to_lower()
+	if token.is_empty():
+		return []
+
+	if token == " ":
+		return ["space"]
+	if token == "space":
+		return ["space"]
+	if token == "shift":
+		return ["shift"]
+
+	if token.begins_with("shift+"):
+		var tail := token.substr(6, token.length() - 6)
+		var normalized_tail := normalize_guide_token(tail)
+		if normalized_tail.is_empty():
+			return ["shift"]
+		return ["shift", normalized_tail]
+
+	var normalized := normalize_guide_token(token)
+	if normalized.is_empty():
+		return []
+	return [normalized]
+
+# キー名のゆれをキーガイド用トークンへ寄せる。
+func normalize_guide_token(token: String) -> String:
+	match token:
+		"spacebar", "space":
+			return "space"
+		"comma":
+			return ","
+		"period", "dot":
+			return "."
+		"slash":
+			return "/"
+		"semicolon":
+			return ";"
+		"apostrophe", "quote":
+			return ":"
+		"leftbracket", "bracketleft":
+			return "["
+		"rightbracket", "bracketright":
+			return "]"
+		"minus":
+			return "-"
+		_:
+			if token.length() == 1:
+				return token
+	return ""
 
 # 現在お題のみを target_text に進捗ハイライト付きで表示する。
 func update_target_label() -> void:
