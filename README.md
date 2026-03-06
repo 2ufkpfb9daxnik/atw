@@ -8,4 +8,4 @@
 
 default.txtは隙を見て更新予定です
 
-![sample](./sample.mp4)
+![sample](https://youtu.be/2IKZLVlPjQg)
