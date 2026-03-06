@@ -8,4 +8,4 @@
 
 default.txtは隙を見て更新予定です
 
-[sample](https://youtu.be/2IKZLVlPjQg)
+[![Watch the video](https://img.youtube.com/vi/2IKZLVlPjQg/0.jpg)](https://youtu.be/2IKZLVlPjQg)
