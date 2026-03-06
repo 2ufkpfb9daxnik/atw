@@ -6,6 +6,8 @@ const MISS_FLASH_TIME := 0.15
 const LOOKAHEAD_KANA := 30
 const LAYOUT_PATH := "res://layouts/qwerty_romaji.json"
 const ODAI_PATH := "res://odai/default.txt"
+const LAYOUT_PATH_FALLBACK := "res://dist/layouts/qwerty_romaji.json"
+const ODAI_PATH_FALLBACK := "res://dist/odai/default.txt"
 const DEFAULT_ROUND_TIME_SEC := 60.0
 const TIMER_MODE_1MIN := 0
 const TIMER_MODE_1HOUR := 1
@@ -13,11 +15,14 @@ const TIMER_MODE_CUSTOM := 2
 const RECORDS_DIR := "user://records"
 const RECORDS_FILE_PATH := "user://records/records.jsonl"
 const APP_SETTINGS_PATH := "user://app_settings.json"
+const UI_FONT_PRIMARY_PATH := "res://fonts/NotoSansJP-Regular.ttf"
+const UI_FONT_FALLBACK_PATH := "res://dist/fonts/NotoSansJP-Regular.ttf"
 
 var miss_timer := 0.0
 var current_layout_path := LAYOUT_PATH
 var current_odai_path := ODAI_PATH
 var current_background_path := ""
+var ui_font_resource: Font
 var layout_file_dialog: FileDialog
 var odai_file_dialog: FileDialog
 var background_file_dialog: FileDialog
@@ -121,6 +126,9 @@ func _ready() -> void:
 		$Records.visible = false
 	if has_node("Result"):
 		$Result.visible = false
+
+	current_layout_path = resolve_existing_resource_path(LAYOUT_PATH, LAYOUT_PATH_FALLBACK)
+	current_odai_path = resolve_existing_resource_path(ODAI_PATH, ODAI_PATH_FALLBACK)
 	
 	var rules := load_json_array(current_layout_path)
 	table = build_table(rules)
@@ -349,11 +357,11 @@ func setup_layout_file_dialog() -> void:
 		return
 
 	layout_file_dialog = FileDialog.new()
-	layout_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	layout_file_dialog.access = FileDialog.ACCESS_RESOURCES if OS.has_feature("web") else FileDialog.ACCESS_FILESYSTEM
 	layout_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	layout_file_dialog.use_native_dialog = true
 	layout_file_dialog.title = "配列を選択"
-	layout_file_dialog.current_dir = get_dialog_initial_dir(current_layout_path)
+	layout_file_dialog.current_dir = get_web_resource_dir_for(current_layout_path, "res://layouts", "res://dist/layouts") if OS.has_feature("web") else get_dialog_initial_dir(current_layout_path)
 	layout_file_dialog.add_filter("*.json", "JSON Layout")
 	layout_file_dialog.file_selected.connect(_on_layout_file_selected)
 	add_child(layout_file_dialog)
@@ -364,11 +372,11 @@ func setup_odai_file_dialog() -> void:
 		return
 
 	odai_file_dialog = FileDialog.new()
-	odai_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	odai_file_dialog.access = FileDialog.ACCESS_RESOURCES if OS.has_feature("web") else FileDialog.ACCESS_FILESYSTEM
 	odai_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	odai_file_dialog.use_native_dialog = true
 	odai_file_dialog.title = "お題ファイルを選択"
-	odai_file_dialog.current_dir = get_dialog_initial_dir(current_odai_path)
+	odai_file_dialog.current_dir = get_web_resource_dir_for(current_odai_path, "res://odai", "res://dist/odai") if OS.has_feature("web") else get_dialog_initial_dir(current_odai_path)
 	odai_file_dialog.add_filter("*.txt", "Text Odai")
 	odai_file_dialog.file_selected.connect(_on_odai_file_selected)
 	add_child(odai_file_dialog)
@@ -841,11 +849,39 @@ func setup_font_size_spinbox() -> void:
 
 # 主要UIのフォントサイズを現在設定で更新する。
 func apply_ui_font_size() -> void:
+	load_ui_font_resource()
 	var rich_targets := ["timer_label", "target_text2", "target_text", "measure_label", "layout_label", "odai_label", "countdown_label", "font_size_label", "background_label"]
 	for name in rich_targets:
 		var n := ui_node(name)
 		if n is RichTextLabel:
 			(n as RichTextLabel).add_theme_font_size_override("normal_font_size", ui_font_size)
+
+	apply_ui_font_recursively(self )
+
+# UIフォントをリソースから読み込む。主にWebでの日本語表示用。
+func load_ui_font_resource() -> void:
+	if ui_font_resource != null:
+		return
+	var candidates: Array[String] = [UI_FONT_PRIMARY_PATH, UI_FONT_FALLBACK_PATH]
+	for path in candidates:
+		if not ResourceLoader.exists(path):
+			continue
+		var loaded: Variant = load(path)
+		if loaded is Font:
+			ui_font_resource = loaded as Font
+			return
+
+# 全Controlへフォントを再帰適用する。
+func apply_ui_font_recursively(node: Node) -> void:
+	if ui_font_resource == null:
+		return
+	if node is Control:
+		var control := node as Control
+		control.add_theme_font_override("font", ui_font_resource)
+		if control is RichTextLabel:
+			(control as RichTextLabel).add_theme_font_override("normal_font", ui_font_resource)
+	for child in node.get_children():
+		apply_ui_font_recursively(child)
 
 # 開始前カウントダウン秒数を返す。
 func get_countdown_sec() -> float:
@@ -1259,6 +1295,13 @@ func _on_result_close_button_pressed() -> void:
 # お題を読み込み、内部状態を初期化して初期表示を行う。
 func init_stream() -> void:
 	odai_lines = load_odai_lines(current_odai_path)
+	if odai_lines.is_empty():
+		var fallback_path := resolve_existing_resource_path(ODAI_PATH, ODAI_PATH_FALLBACK)
+		if fallback_path != current_odai_path:
+			odai_lines = load_odai_lines(fallback_path)
+			if not odai_lines.is_empty():
+				current_odai_path = fallback_path
+				update_odai_label()
 	if odai_lines.is_empty():
 		push_error("No Japanese odai lines loaded")
 	
@@ -1985,6 +2028,8 @@ func update_history_box() -> void:
 func get_or_create_pool_label(box: HBoxContainer, pool: Array[Label], index: int) -> Label:
 	while pool.size() <= index:
 		var label := Label.new()
+		if ui_font_resource != null:
+			label.add_theme_font_override("font", ui_font_resource)
 		pool.append(label)
 		box.add_child(label)
 	var result := pool[index]
@@ -2361,10 +2406,37 @@ func load_raw(path: String) -> String:
 	if file == null:
 		push_error("Failed to open file: " + path)
 		return ""
-	
-	var content := file.get_as_text()
+
+	var bytes := file.get_buffer(file.get_length())
 	file.close()
+	if bytes.is_empty():
+		return ""
+
+	var content := bytes.get_string_from_utf8()
+	if content.is_empty():
+		push_error("Text decode failed (UTF-8 expected): " + path)
+		return ""
+
+	# UTF-8 BOM が含まれている場合は除去する。
+	if not content.is_empty() and content.unicode_at(0) == 0xFEFF:
+		content = content.substr(1)
 	return content
+
+# 優先パスが存在しなければフォールバックを返す。
+func resolve_existing_resource_path(primary: String, fallback: String) -> String:
+	if FileAccess.file_exists(primary):
+		return primary
+	if FileAccess.file_exists(fallback):
+		return fallback
+	return primary
+
+# Web では利用可能な res:// ディレクトリを優先して返す。
+func get_web_resource_dir_for(current_path: String, primary_dir: String, fallback_dir: String) -> String:
+	if current_path.begins_with("res://") and FileAccess.file_exists(current_path):
+		return current_path.get_base_dir()
+	if FileAccess.file_exists(primary_dir.path_join("default.txt")) or FileAccess.file_exists(primary_dir.path_join("qwerty_romaji.json")):
+		return primary_dir
+	return fallback_dir
 
 # お題ファイルを行単位で読み込み、空行除去して返す。
 func load_odai_lines(path: String) -> Array[String]:
