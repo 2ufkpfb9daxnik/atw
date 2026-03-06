@@ -48,7 +48,7 @@ var history_caret_child_index := 0
 var hira_target_x := 0.0
 var history_target_x := 0.0
 var smooth_follow_initialized := false
-const INPUT_BOX_FOLLOW_SPEED := 14.0
+const INPUT_BOX_FOLLOW_SPEED := 50
 var typed_target_chars := 0
 var result_overlay: Control
 var result_value_chars_label: Label
@@ -198,7 +198,6 @@ func can_start_round_by_space() -> bool:
 # ミス表示用タイマーを減算し、期限切れで表示を更新する。
 func _process(delta: float) -> void:
 	update_timer(delta)
-	update_input_boxes_smooth(delta)
 
 	if miss_timer > 0.0:
 		miss_timer -= delta
@@ -2043,11 +2042,10 @@ func align_input_boxes_to_target_caret() -> void:
 	var history_caret_x := get_caret_x_in_hbox(history_box, history_caret_child_index)
 	history_target_x = target_global_x - history_caret_x
 
-	# 初回だけは現在位置を目標に合わせ、以後は補間で追従する。
-	if not smooth_follow_initialized:
-		hira_box.position.x = hira_target_x
-		history_box.position.x = history_target_x
-		smooth_follow_initialized = true
+	# 毎回即時反映して、出現時点からキャレット位置を一致させる。
+	hira_box.position.x = hira_target_x
+	history_box.position.x = history_target_x
+	smooth_follow_initialized = true
 
 # 入力ボックスの横位置を目標値へ滑らかに補間する。
 func update_input_boxes_smooth(delta: float) -> void:
