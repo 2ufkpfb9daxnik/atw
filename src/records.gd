@@ -60,6 +60,8 @@ var graph_intervals: Array[float] = []
 var graph_max_interval := 1.0
 var graph_zoom := 1.0
 var graph_dragging := false
+var list_sort_key := "created_at"
+var list_sort_desc := true
 
 # 記録画面を初期化し、一覧/詳細UIを構築する。
 func _ready() -> void:
@@ -610,7 +612,7 @@ func refresh_records_list() -> void:
 
 	add_header_row()
 
-	var records := load_records_jsonl()
+	var records := sort_records_for_list(load_records_jsonl())
 	if records.is_empty():
 		var empty_label := Label.new()
 		empty_label.text = "記録がありません"
@@ -626,13 +628,13 @@ func add_header_row() -> void:
 	row.add_theme_constant_override("separation", 10)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-	add_cell(row, "日時", 180)
-	add_cell(row, "スコア", 70)
-	add_cell(row, "計測秒", 80)
-	add_cell(row, "スコア/秒", 80)
-	add_cell(row, "入力文字", 80)
-	add_cell(row, "ミス数", 70)
-	add_cell(row, "ミス率", 80)
+	add_sort_header_button(row, "日時", 180, "created_at")
+	add_sort_header_button(row, "スコア", 70, "score")
+	add_sort_header_button(row, "計測秒", 80, "measured_seconds")
+	add_sort_header_button(row, "スコア/秒", 80, "score_per_sec")
+	add_sort_header_button(row, "入力文字", 80, "typed_chars")
+	add_sort_header_button(row, "ミス数", 70, "miss_count")
+	add_sort_header_button(row, "ミス率", 80, "miss_rate")
 	add_cell(row, "お題", 180)
 	add_cell(row, "配列", 140)
 	add_cell(row, "操作", 160)
@@ -641,6 +643,96 @@ func add_header_row() -> void:
 
 	var sep := HSeparator.new()
 	list_vbox.add_child(sep)
+
+# ソート可能ヘッダーボタンを追加する。
+func add_sort_header_button(row: HBoxContainer, label_text: String, width: float, sort_key: String) -> void:
+	var button := Button.new()
+	button.text = build_sort_header_text(label_text, sort_key)
+	button.custom_minimum_size = Vector2(width, 0)
+	button.clip_text = true
+	button.focus_mode = Control.FOCUS_NONE
+	button.pressed.connect(_on_sort_header_pressed.bind(sort_key))
+	row.add_child(button)
+
+# ソート対象なら現在の昇降順をヘッダ文言へ反映する。
+func build_sort_header_text(label_text: String, sort_key: String) -> String:
+	if sort_key != list_sort_key:
+		return label_text
+	var marker := "v" if list_sort_desc else "^"
+	return "%s %s" % [label_text, marker]
+
+# ヘッダ押下時にソートキー/順序を切り替えて一覧を再描画する。
+func _on_sort_header_pressed(sort_key: String) -> void:
+	if sort_key == list_sort_key:
+		list_sort_desc = not list_sort_desc
+	else:
+		list_sort_key = sort_key
+		list_sort_desc = true
+	refresh_records_list()
+
+# 現在のソート設定に基づいてレコード配列を並べ替える。
+func sort_records_for_list(records: Array[Dictionary]) -> Array[Dictionary]:
+	var sorted: Array[Dictionary] = records.duplicate()
+	sorted.sort_custom(Callable(self , "_compare_record_for_list"))
+	return sorted
+
+# 一覧ソート比較。主キー同値時は日時の新しい順を優先する。
+func _compare_record_for_list(a: Dictionary, b: Dictionary) -> bool:
+	var cmp := compare_record_sort_key(a, b, list_sort_key)
+	if cmp == 0:
+		cmp = compare_record_sort_key(a, b, "created_at")
+		if cmp == 0:
+			var a_id := String(a.get("record_id", ""))
+			var b_id := String(b.get("record_id", ""))
+			if a_id == b_id:
+				return false
+			return a_id > b_id
+		return cmp > 0
+	if list_sort_desc:
+		return cmp > 0
+	return cmp < 0
+
+# 指定キーで a と b を比較する。a>b なら 1、a<b なら -1、同値なら 0。
+func compare_record_sort_key(a: Dictionary, b: Dictionary, key: String) -> int:
+	var a_val: Variant = get_record_sort_value(a, key)
+	var b_val: Variant = get_record_sort_value(b, key)
+	if a_val is String or b_val is String:
+		var as_text := String(a_val)
+		var bs_text := String(b_val)
+		if as_text == bs_text:
+			return 0
+		return 1 if as_text > bs_text else -1
+	var af := float(a_val)
+	var bf := float(b_val)
+	if is_equal_approx(af, bf):
+		return 0
+	return 1 if af > bf else -1
+
+# 一覧ソート用の比較値をレコードから取り出す。
+func get_record_sort_value(rec: Dictionary, key: String) -> Variant:
+	match key:
+		"created_at":
+			return String(rec.get("created_at", ""))
+		"score":
+			return float(int(rec.get("score", 0)))
+		"measured_seconds":
+			return get_record_seconds(rec)
+		"score_per_sec":
+			var sec := get_record_seconds(rec)
+			if sec <= 0.0:
+				return 0.0
+			return float(int(rec.get("score", 0))) / sec
+		"typed_chars":
+			return float(int(rec.get("typed_chars", 0)))
+		"miss_count":
+			return float(int(rec.get("miss_count", 0)))
+		"miss_rate":
+			var typed := int(rec.get("typed_chars", 0))
+			if typed <= 0:
+				return 0.0
+			return float(int(rec.get("miss_count", 0))) / float(typed)
+		_:
+			return String(rec.get("created_at", ""))
 
 # レコード1件分の表示行を追加する。
 func add_record_row(rec: Dictionary) -> void:
