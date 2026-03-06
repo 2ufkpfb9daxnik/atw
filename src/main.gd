@@ -64,6 +64,8 @@ var stream_version := 0
 var stream_reachability_cache: Dictionary = {}
 var stream_next_valid_keys_cache: Dictionary = {}
 var stream_prompt_cache: Dictionary = {}
+var stream_valid_transition_cache: Dictionary = {}
+var stream_reachability_ready := false
 var target_flow_labels: Array[Label] = []
 var hiragana_labels: Array[Label] = []
 var history_labels: Array[Label] = []
@@ -619,6 +621,8 @@ func invalidate_stream_caches() -> void:
 	stream_reachability_cache.clear()
 	stream_next_valid_keys_cache.clear()
 	stream_prompt_cache.clear()
+	stream_valid_transition_cache.clear()
+	stream_reachability_ready = false
 
 # レイアウトJSONが state/input/output/next_state を持つ配列か検証する。
 func validate_layout_rules(path: String, rules: Array) -> bool:
@@ -1409,10 +1413,18 @@ func check_input_candidates(input_candidates: Array[String]) -> void:
 		snap_history = get_hbox_visible_text(ui_node("history_box"))
 
 	var transitions: Dictionary = table.get(current_state, {})
+	var valid_transitions := get_valid_transition_map(current_state, stream_cursor)
 	var miss_key := input_candidates[0]
 	var miss_reason := "invalid_transition"
 
 	for input_char in input_candidates:
+		if valid_transitions.has(input_char):
+			var ok_transition: Dictionary = valid_transitions[input_char]
+			var ok_output := String(ok_transition.get("output", ""))
+			log_input_event(input_char, true, expected_kana, expected_target, "ok", snap_target3, snap_hiragana, snap_history)
+			on_correct(input_char, ok_transition, ok_output)
+			return
+
 		if not transitions.has(input_char):
 			continue
 
@@ -1424,18 +1436,8 @@ func check_input_candidates(input_candidates: Array[String]) -> void:
 				miss_key = input_char
 			continue
 
-		var next_state := String(transition.get("next", "default"))
-		var next_pos := stream_cursor + output.length()
-		# Empty-output transitions can be traps (e.g. default->k when next kana is not k*).
-		# Treat those as miss so the game never enters an unwinnable state.
-		if not can_type_from_stream_cached(next_state, next_pos):
-			miss_reason = "dead_end"
-			miss_key = input_char
-			continue
-
-		log_input_event(input_char, true, expected_kana, expected_target, "ok", snap_target3, snap_hiragana, snap_history)
-		on_correct(input_char, transition, output)
-		return
+		miss_reason = "dead_end"
+		miss_key = input_char
 
 	log_input_event(miss_key, false, expected_kana, expected_target, miss_reason, snap_target3, snap_hiragana, snap_history)
 	on_miss(miss_key)
@@ -1849,12 +1851,10 @@ func find_shortest_prompt(start_state: String, start_pos: int, target_pos: int) 
 			best_key = node_key(state, pos)
 			break
 		
-		var transitions: Dictionary = table.get(state, {})
+		var transitions := get_valid_transition_map(state, pos)
 		for input_key in transitions.keys():
 			var transition: Dictionary = transitions[input_key]
 			var output := String(transition.get("output", ""))
-			if not output_matches_at(output, pos):
-				continue
 			
 			var next_pos := pos + output.length()
 			var next_state := String(transition.get("next", "default"))
@@ -1897,6 +1897,121 @@ func get_next_valid_keys(state: String, pos: int) -> Array[String]:
 			return cached
 
 	var keys: Array[String] = []
+	var transitions := get_valid_transition_map(state, pos)
+	for input_key in transitions.keys():
+		keys.append(String(input_key))
+	keys.sort()
+	stream_next_valid_keys_cache[cache_key] = keys
+	return keys
+
+# 現在の kana_stream に対する到達可能性をキャッシュ付きで返す。
+func can_type_from_stream_cached(start_state: String, start_pos: int) -> bool:
+	if start_pos < 0 or start_pos > kana_stream.length():
+		return false
+	if start_pos >= kana_stream.length():
+		return true
+	ensure_stream_reachability_cache()
+	return bool(stream_reachability_cache.get(node_key(start_state, start_pos), false))
+
+# 現在のストリームに対する到達可能性テーブルを必要時に構築する。
+func ensure_stream_reachability_cache() -> void:
+	if stream_reachability_ready:
+		return
+	build_stream_reachability_cache()
+
+# (state, pos) -> 完走可否の真理値を逆順DPで前計算する。
+func build_stream_reachability_cache() -> void:
+	stream_reachability_cache.clear()
+	var states := collect_layout_states()
+	if states.is_empty():
+		stream_reachability_ready = true
+		return
+
+	var epsilon_predecessors: Dictionary = {}
+	for state in states:
+		epsilon_predecessors[state] = []
+
+	for state in states:
+		var transitions: Dictionary = table.get(state, {})
+		for input_key in transitions.keys():
+			var transition: Dictionary = transitions[input_key]
+			var output := String(transition.get("output", ""))
+			if not output.is_empty():
+				continue
+			var next_state := String(transition.get("next", "default"))
+			if not epsilon_predecessors.has(next_state):
+				epsilon_predecessors[next_state] = []
+			var preds: Array = epsilon_predecessors[next_state]
+			preds.append(state)
+			epsilon_predecessors[next_state] = preds
+
+	var text_len := kana_stream.length()
+	for state in states:
+		stream_reachability_cache[node_key(state, text_len)] = true
+
+	for pos in range(text_len - 1, -1, -1):
+		var true_states: Dictionary = {}
+		for state in states:
+			var transitions: Dictionary = table.get(state, {})
+			for input_key in transitions.keys():
+				var transition: Dictionary = transitions[input_key]
+				var output := String(transition.get("output", ""))
+				if output.is_empty():
+					continue
+				if not output_matches_at(output, pos):
+					continue
+				var next_pos := pos + output.length()
+				if next_pos > text_len:
+					continue
+				var next_state := String(transition.get("next", "default"))
+				if bool(stream_reachability_cache.get(node_key(next_state, next_pos), false)):
+					true_states[state] = true
+					break
+
+		var queue: Array[String] = []
+		for state in true_states.keys():
+			queue.append(String(state))
+
+		var head := 0
+		while head < queue.size():
+			var reachable_state := queue[head]
+			head += 1
+			var preds: Array = epsilon_predecessors.get(reachable_state, [])
+			for pred in preds:
+				var pred_state := String(pred)
+				if true_states.has(pred_state):
+					continue
+				true_states[pred_state] = true
+				queue.append(pred_state)
+
+		for state in states:
+			stream_reachability_cache[node_key(state, pos)] = true_states.has(state)
+
+	stream_reachability_ready = true
+
+# レイアウト中に出現する状態名を重複なく列挙する。
+func collect_layout_states() -> Array[String]:
+	var seen: Dictionary = {}
+	for state_key in table.keys():
+		seen[String(state_key)] = true
+		var transitions: Dictionary = table[state_key]
+		for input_key in transitions.keys():
+			var transition: Dictionary = transitions[input_key]
+			seen[String(transition.get("next", "default"))] = true
+	var states: Array[String] = []
+	for state in seen.keys():
+		states.append(String(state))
+	return states
+
+# 現在位置で入力可能かつ完走可能な遷移のみを返す。
+func get_valid_transition_map(state: String, pos: int) -> Dictionary:
+	var cache_key := "%d|%s|%d" % [stream_version, state, pos]
+	if stream_valid_transition_cache.has(cache_key):
+		var cached: Variant = stream_valid_transition_cache[cache_key]
+		if cached is Dictionary:
+			return cached
+
+	var valid: Dictionary = {}
 	var transitions: Dictionary = table.get(state, {})
 	for input_key in transitions.keys():
 		var transition: Dictionary = transitions[input_key]
@@ -1906,19 +2021,10 @@ func get_next_valid_keys(state: String, pos: int) -> Array[String]:
 		var next_state := String(transition.get("next", "default"))
 		var next_pos := pos + output.length()
 		if can_type_from_stream_cached(next_state, next_pos):
-			keys.append(String(input_key))
-	keys.sort()
-	stream_next_valid_keys_cache[cache_key] = keys
-	return keys
+			valid[String(input_key)] = transition
 
-# 現在の kana_stream に対する到達可能性をキャッシュ付きで返す。
-func can_type_from_stream_cached(start_state: String, start_pos: int) -> bool:
-	var cache_key := "%d|%s|%d" % [stream_version, start_state, start_pos]
-	if stream_reachability_cache.has(cache_key):
-		return bool(stream_reachability_cache[cache_key])
-	var ok := can_type_text_from(kana_stream, start_state, start_pos)
-	stream_reachability_cache[cache_key] = ok
-	return ok
+	stream_valid_transition_cache[cache_key] = valid
+	return valid
 
 # かな全文が既定レイアウトで入力可能かを判定する。
 func can_type_kana(text: String) -> bool:
