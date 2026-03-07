@@ -18,6 +18,7 @@ var list_vbox: VBoxContainer
 var detail_root: Control
 var list_back_button: Button
 var list_eval_button: Button
+var list_open_records_file_button: Button
 var detail_back_button: Button
 var detail_replay_start_button: Button
 var detail_replay_stop_button: Button
@@ -27,10 +28,13 @@ var detail_replay_log: RichTextLabel
 var detail_graph_scroll: ScrollContainer
 var detail_graph_canvas: Control
 var detail_graph_line: Line2D
+var detail_graph_score_per_sec_line: Line2D
 var detail_graph_axes: Line2D
 var detail_graph_marker: ColorRect
 var detail_graph_y_max_label: Label
 var detail_graph_y_min_label: Label
+var detail_graph_right_y_max_label: Label
+var detail_graph_right_y_min_label: Label
 var detail_graph_x_start_label: Label
 var detail_graph_x_end_label: Label
 var detail_graph_zoom_label: Label
@@ -58,6 +62,8 @@ var replay_index := 0
 var replay_start_msec := 0
 var graph_intervals: Array[float] = []
 var graph_max_interval := 1.0
+var graph_score_per_sec: Array[float] = []
+var graph_max_score_per_sec := 1.0
 var graph_zoom := 1.0
 var graph_dragging := false
 var list_sort_key := "created_at"
@@ -71,6 +77,9 @@ func _ready() -> void:
 	list_eval_button = find_child("eval_button", true, false) as Button
 	if list_eval_button != null:
 		list_eval_button.pressed.connect(_on_eval_button_pressed)
+	list_open_records_file_button = find_child("open_records_file_button", true, false) as Button
+	if list_open_records_file_button != null:
+		list_open_records_file_button.pressed.connect(_on_open_records_file_button_pressed)
 	build_list_ui()
 	build_detail_ui()
 	build_analytics_ui()
@@ -87,10 +96,19 @@ func update_records_shortcut_labels() -> void:
 			list_eval_button.text = "評価(A)"
 		else:
 			list_eval_button.text = "評価"
+	if list_open_records_file_button != null:
+		list_open_records_file_button.text = "records.jsonlを開く"
 	if detail_back_button != null:
 		detail_back_button.text = "一覧へ戻る(V)"
 	if analytics_back_button != null:
 		analytics_back_button.text = "一覧へ戻る(V)"
+
+# recordsファイル（jsonl）を既定アプリで開く。未作成時は保存先フォルダを開く。
+func _on_open_records_file_button_pressed() -> void:
+	if FileAccess.file_exists(RECORDS_FILE_PATH):
+		OS.shell_open(ProjectSettings.globalize_path(RECORDS_FILE_PATH))
+		return
+	OS.shell_open(ProjectSettings.globalize_path(RECORDS_FILE_PATH.get_base_dir()))
 
 # 一覧表示中で評価ショートカットを受け付けられるか返す。
 func can_open_analytics_by_shortcut() -> bool:
@@ -255,7 +273,7 @@ func build_analytics_ui() -> void:
 		body_vbox.add_child(analytics_summary_text)
 
 		var graph_title := Label.new()
-		graph_title.text = "結果遷移グラフ（新しい順ではなく時系列順）"
+		graph_title.text = "結果遷移グラフ（時系列順）"
 		body_vbox.add_child(graph_title)
 
 		analytics_graph_scroll = ScrollContainer.new()
@@ -436,7 +454,7 @@ func build_detail_ui() -> void:
 	right_col.add_child(detail_replay_log)
 
 	var graph_title := Label.new()
-	graph_title.text = "入力間隔グラフ (ms)"
+	graph_title.text = "入力間隔(ms) / スコア毎秒 グラフ"
 	body_vbox.add_child(graph_title)
 
 	var graph_bar := HBoxContainer.new()
@@ -472,7 +490,7 @@ func build_detail_ui() -> void:
 	graph_bar.add_child(detail_graph_stats_label)
 
 	var axis_label := Label.new()
-	axis_label.text = "Y軸: 前の打鍵からの入力間隔(ms) / X軸: 入力順"
+	axis_label.text = "縦軸(左): 前の打鍵からの入力間隔(ms) / 縦軸(右): スコア毎秒 / 横軸: 入力順"
 	body_vbox.add_child(axis_label)
 
 	var graph_area := HBoxContainer.new()
@@ -517,10 +535,33 @@ func build_detail_ui() -> void:
 	detail_graph_line.default_color = Color(0.2, 0.8, 0.5, 0.95)
 	detail_graph_canvas.add_child(detail_graph_line)
 
+	detail_graph_score_per_sec_line = Line2D.new()
+	detail_graph_score_per_sec_line.width = 2.0
+	detail_graph_score_per_sec_line.default_color = Color(1.0, 0.75, 0.2, 0.95)
+	detail_graph_canvas.add_child(detail_graph_score_per_sec_line)
+
 	detail_graph_marker = ColorRect.new()
 	detail_graph_marker.color = Color(1.0, 0.3, 0.3, 0.95)
 	detail_graph_marker.custom_minimum_size = Vector2(2, GRAPH_HEIGHT)
 	detail_graph_canvas.add_child(detail_graph_marker)
+
+	var right_axis_vbox := VBoxContainer.new()
+	right_axis_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	graph_area.add_child(right_axis_vbox)
+
+	detail_graph_right_y_max_label = Label.new()
+	detail_graph_right_y_max_label.text = "0 /s"
+	detail_graph_right_y_max_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	right_axis_vbox.add_child(detail_graph_right_y_max_label)
+
+	var right_spacer := Control.new()
+	right_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	right_axis_vbox.add_child(right_spacer)
+
+	detail_graph_right_y_min_label = Label.new()
+	detail_graph_right_y_min_label.text = "0 /s"
+	detail_graph_right_y_min_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	right_axis_vbox.add_child(detail_graph_right_y_min_label)
 
 	var x_axis_row := HBoxContainer.new()
 	x_axis_row.add_theme_constant_override("separation", 8)
@@ -1173,19 +1214,24 @@ func fill_detail_odai(rec: Dictionary) -> void:
 
 # 入力間隔の折れ線グラフを作成する。
 func fill_interval_graph(events: Array[Dictionary]) -> void:
-	if detail_graph_canvas == null or detail_graph_line == null or detail_graph_axes == null:
+	if detail_graph_canvas == null or detail_graph_line == null or detail_graph_score_per_sec_line == null or detail_graph_axes == null:
 		return
 	graph_intervals = build_intervals_ms(events)
+	graph_score_per_sec = build_score_per_sec_series(events)
 	graph_max_interval = 1.0
 	for v in graph_intervals:
 		graph_max_interval = maxf(graph_max_interval, float(v))
+	graph_max_score_per_sec = 1.0
+	for v in graph_score_per_sec:
+		graph_max_score_per_sec = maxf(graph_max_score_per_sec, float(v))
 	redraw_graph()
 
 # 現在のズーム率とデータに合わせて折れ線・軸・マーカーを再描画する。
 func redraw_graph() -> void:
-	if detail_graph_canvas == null or detail_graph_line == null or detail_graph_axes == null:
+	if detail_graph_canvas == null or detail_graph_line == null or detail_graph_score_per_sec_line == null or detail_graph_axes == null:
 		return
 	detail_graph_line.clear_points()
+	detail_graph_score_per_sec_line.clear_points()
 	detail_graph_axes.clear_points()
 	if detail_graph_marker != null:
 		detail_graph_marker.visible = false
@@ -1197,7 +1243,7 @@ func redraw_graph() -> void:
 
 	if graph_intervals.is_empty():
 		detail_graph_canvas.custom_minimum_size = Vector2(320, GRAPH_HEIGHT)
-		update_graph_axis_labels(1.0, 0)
+		update_graph_axis_labels(1.0, 1.0, 0)
 		return
 
 	var data_points := graph_intervals.size()
@@ -1219,16 +1265,27 @@ func redraw_graph() -> void:
 		var y := bottom_y - (plot_h * ratio)
 		detail_graph_line.add_point(Vector2(x, y))
 
-	update_graph_axis_labels(graph_max_interval, replay_events.size())
+	for i in range(graph_score_per_sec.size()):
+		var v_sps := float(graph_score_per_sec[i])
+		var ratio_sps := v_sps / graph_max_score_per_sec
+		var x_sps := GRAPH_MARGIN_LEFT + float(i) * step
+		var y_sps := bottom_y - (plot_h * ratio_sps)
+		detail_graph_score_per_sec_line.add_point(Vector2(x_sps, y_sps))
+
+	update_graph_axis_labels(graph_max_interval, graph_max_score_per_sec, replay_events.size())
 	if not replay_events.is_empty():
 		set_graph_current_index(maxi(replay_index - 1, 0), false)
 
 # 軸ラベルを最新のスケールとデータ数に合わせて更新する。
-func update_graph_axis_labels(max_interval: float, event_count: int) -> void:
+func update_graph_axis_labels(max_interval: float, max_score_per_sec: float, event_count: int) -> void:
 	if detail_graph_y_max_label != null:
 		detail_graph_y_max_label.text = "%.0f ms" % max_interval
 	if detail_graph_y_min_label != null:
 		detail_graph_y_min_label.text = "0 ms"
+	if detail_graph_right_y_max_label != null:
+		detail_graph_right_y_max_label.text = "%.2f /s" % max_score_per_sec
+	if detail_graph_right_y_min_label != null:
+		detail_graph_right_y_min_label.text = "0 /s"
 	if detail_graph_x_start_label != null:
 		detail_graph_x_start_label.text = "1打鍵目"
 	if detail_graph_x_end_label != null:
@@ -1432,6 +1489,28 @@ func build_intervals_ms(events: Array[Dictionary]) -> Array[float]:
 		var curr := float((events[i] as Dictionary).get("t_ms", prev))
 		result.append(maxf(curr - prev, 0.0))
 		prev = curr
+	return result
+
+# 各時点(2打鍵目以降)のスコア/秒を系列化する。
+func build_score_per_sec_series(events: Array[Dictionary]) -> Array[float]:
+	var result: Array[float] = []
+	if events.size() <= 1:
+		return result
+
+	var miss := 0
+	for i in range(events.size()):
+		var ev := events[i] as Dictionary
+		if not bool(ev.get("ok", false)):
+			miss += 1
+		if i == 0:
+			continue
+		var typed := i + 1
+		var score := typed - miss
+		var elapsed_sec := float(int(ev.get("t_ms", 0))) / 1000.0
+		var sps := 0.0
+		if elapsed_sec > 0.0:
+			sps = float(score) / elapsed_sec
+		result.append(maxf(sps, 0.0))
 	return result
 
 # レコードの入力イベント配列を安全に取得する。

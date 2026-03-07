@@ -30,6 +30,7 @@ var last_layout_validation_error := ""
 var last_odai_validation_error := ""
 
 var odai_lines: Array[String] = []
+var odai_cycle_deck: Array[String] = []
 var sentence_cache: Dictionary = {}
 var table: Dictionary = {}
 
@@ -44,6 +45,7 @@ var typed_history := ""
 var key_timestamps: Array[float] = []
 var miss_count := 0
 var timer_running := false
+var practice_mode_running := false
 var time_left_sec := DEFAULT_ROUND_TIME_SEC
 var countdown_running := false
 var countdown_left_sec := 0.0
@@ -56,9 +58,17 @@ var smooth_follow_initialized := false
 const INPUT_BOX_FOLLOW_SPEED := 50
 var typed_target_chars := 0
 var result_overlay: Control
+var result_message_label: Label
 var result_value_chars_label: Label
 var result_value_miss_label: Label
 var result_value_score_label: Label
+var result_value_seconds_label: Label
+var result_value_sps_avg_label: Label
+var result_value_sps_max_label: Label
+var result_value_sps_min_label: Label
+var result_value_miss_rate_label: Label
+var result_value_odai_label: Label
+var result_value_layout_label: Label
 var round_start_msec := 0
 var input_events: Array[Dictionary] = []
 var used_odai_unique_lines: Array[String] = []
@@ -115,12 +125,16 @@ func _ready() -> void:
 		(ui_node("change_background") as Button).pressed.connect(_on_change_background_button_pressed)
 	if has_ui_node("start_button"):
 		(ui_node("start_button") as Button).pressed.connect(_on_start_button_pressed)
+	if has_ui_node("start_without_measure_button"):
+		(ui_node("start_without_measure_button") as Button).pressed.connect(_on_start_without_measure_button_pressed)
 	if has_ui_node("timer_mode_option"):
 		(ui_node("timer_mode_option") as OptionButton).item_selected.connect(_on_timer_mode_option_item_selected)
 	if has_ui_node("custom_time_spinbox"):
 		(ui_node("custom_time_spinbox") as SpinBox).value_changed.connect(_on_custom_time_spinbox_value_changed)
 	if has_ui_node("countdown_spinbox"):
 		(ui_node("countdown_spinbox") as SpinBox).value_changed.connect(_on_countdown_spinbox_value_changed)
+	if has_ui_node("allow_miss_spinbox"):
+		(ui_node("allow_miss_spinbox") as SpinBox).value_changed.connect(_on_allow_miss_spinbox_value_changed)
 	
 	if has_node("Records"):
 		$Records.visible = false
@@ -142,6 +156,7 @@ func _ready() -> void:
 	update_background_label()
 	setup_timer_mode_option()
 	setup_countdown_spinbox()
+	setup_allow_miss_spinbox()
 	setup_font_size_spinbox()
 	setup_key_guide()
 	if has_ui_node("font_size_spinbox"):
@@ -163,7 +178,10 @@ func update_main_shortcut_labels() -> void:
 		records_btn.text = "記録(R)"
 	var start_btn := ui_node("start_button") as Button
 	if start_btn != null:
-		start_btn.text = "開始"
+		start_btn.text = "計測開始"
+	var start_without_btn := ui_node("start_without_measure_button") as Button
+	if start_without_btn != null:
+		start_without_btn.text = "計測しないで開始"
 	var exit_btn := ui_node("exit_button") as Button
 	if exit_btn != null:
 		exit_btn.text = "終了(E)"
@@ -187,21 +205,34 @@ func update_start_button_shortcut_label() -> void:
 		return
 	if timer_running:
 		start_btn.text = "計測停止(Esc)"
-		return
-	if can_start_round_by_space():
-		start_btn.text = "開始(Space)"
+	elif can_start_round_by_space():
+		start_btn.text = "計測開始(Space)"
 	else:
-		start_btn.text = "開始"
+		start_btn.text = "計測開始"
+
+	if has_ui_node("start_without_measure_button"):
+		var start_without_btn := ui_node("start_without_measure_button") as Button
+		if start_without_btn != null:
+			if practice_mode_running:
+				start_without_btn.text = "やめる(Esc)"
+			elif can_start_round_without_measure_by_enter():
+				start_without_btn.text = "計測しないで開始(Enter)"
+			else:
+				start_without_btn.text = "計測しないで開始"
 
 # Space で計測開始できる条件を返す。
 func can_start_round_by_space() -> bool:
 	if not $main_ui.visible:
 		return false
-	if timer_running or countdown_running:
+	if timer_running or countdown_running or practice_mode_running:
 		return false
 	if result_overlay != null and result_overlay.visible:
 		return false
 	return true
+
+# Enter で非計測開始できる条件を返す。
+func can_start_round_without_measure_by_enter() -> bool:
+	return can_start_round_by_space()
 
 # ミス表示用タイマーを減算し、期限切れで表示を更新する。
 func _process(delta: float) -> void:
@@ -239,7 +270,7 @@ func _input(event: InputEvent) -> void:
 			return
 
 		# 非計測時のみ、メイン操作ショートカットを有効化。
-		if not timer_running and not countdown_running:
+		if not timer_running and not countdown_running and not practice_mode_running:
 			if key_event.keycode == KEY_R:
 				_on_records_button_pressed()
 				return
@@ -253,12 +284,14 @@ func _input(event: InputEvent) -> void:
 				_on_change_odai_button_pressed()
 				return
 
-		# Space starts countdown/measurement when idle.
-		if not timer_running:
+		# Space/Enter starts typing mode when fully idle.
+		if not timer_running and not practice_mode_running:
 			if countdown_running:
 				return
 			if key_event.unicode == 32:
 				start_round()
+			elif key_event.keycode == KEY_ENTER:
+				start_round_without_measurement()
 			return
 
 		var input_candidates := build_input_candidates_from_key_event(key_event)
@@ -298,7 +331,7 @@ func append_unique_input_candidate(candidates: Array[String], token: String) -> 
 
 # お題ストリームを初期化し、表示を先頭状態へ戻す。
 func reset_prompts() -> void:
-	if timer_running or countdown_running:
+	if timer_running or countdown_running or practice_mode_running:
 		finish_round(false, false)
 	hide_result_overlay()
 	reset_state()
@@ -620,6 +653,7 @@ func apply_layout_file(path: String) -> bool:
 	table = build_table(rules)
 	invalidate_stream_caches()
 	sentence_cache.clear()
+	odai_cycle_deck.clear()
 	reset_prompts()
 	update_layout_label()
 	save_app_settings()
@@ -635,6 +669,7 @@ func apply_odai_file(path: String) -> bool:
 	current_odai_path = path
 	odai_lines = checked.get("lines", [])
 	sentence_cache.clear()
+	odai_cycle_deck.clear()
 	reset_prompts()
 	update_odai_label()
 	save_app_settings()
@@ -778,6 +813,13 @@ func update_layout_label() -> void:
 func _on_start_button_pressed() -> void:
 	start_round()
 
+# 非計測開始ボタン押下でタイピングモードを開始する。
+func _on_start_without_measure_button_pressed() -> void:
+	if practice_mode_running:
+		reset_prompts()
+		return
+	start_round_without_measurement()
+
 # タイマーモード変更時にUI状態と待機時表示時間を更新する。
 func _on_timer_mode_option_item_selected(_index: int) -> void:
 	update_custom_time_visibility()
@@ -795,6 +837,11 @@ func _on_custom_time_spinbox_value_changed(_value: float) -> void:
 func _on_countdown_spinbox_value_changed(_value: float) -> void:
 	if not timer_running and not countdown_running:
 		update_timer_label()
+
+# 許容ミス数変更時のフック（待機中のみ表示更新）。
+func _on_allow_miss_spinbox_value_changed(_value: float) -> void:
+	if not timer_running and not countdown_running:
+		update_measure_label()
 
 # フォントサイズ変更時にUIへ反映する。
 func _on_font_size_spinbox_value_changed(value: float) -> void:
@@ -834,6 +881,26 @@ func setup_countdown_spinbox() -> void:
 	if spin.value < 0:
 		spin.value = 0
 
+# 許容ミス数入力UIを初期化する。
+func setup_allow_miss_spinbox() -> void:
+	if not has_ui_node("allow_miss_spinbox"):
+		return
+	var spin := ui_node("allow_miss_spinbox") as SpinBox
+	spin.min_value = 0
+	spin.max_value = 2147483647
+	spin.step = 1
+	if spin.value == 0:
+		spin.value = 50
+	if spin.value < 0:
+		spin.value = 50
+
+# 現在設定の許容ミス数を返す。
+func get_allow_miss_limit() -> int:
+	if not has_ui_node("allow_miss_spinbox"):
+		return 999999
+	var spin := ui_node("allow_miss_spinbox") as SpinBox
+	return maxi(int(round(spin.value)), 0)
+
 # フォントサイズ入力UIを初期化する。
 func setup_font_size_spinbox() -> void:
 	if not has_ui_node("font_size_spinbox"):
@@ -850,7 +917,7 @@ func setup_font_size_spinbox() -> void:
 # 主要UIのフォントサイズを現在設定で更新する。
 func apply_ui_font_size() -> void:
 	load_ui_font_resource()
-	var rich_targets := ["timer_label", "target_text2", "target_text", "measure_label", "layout_label", "odai_label", "countdown_label", "font_size_label", "background_label"]
+	var rich_targets := ["timer_label", "target_text2", "target_text", "measure_label", "layout_label", "odai_label", "countdown_label", "allow_miss_label", "font_size_label", "background_label"]
 	for name in rich_targets:
 		var n := ui_node(name)
 		if n is RichTextLabel:
@@ -926,6 +993,7 @@ func start_round() -> void:
 		ensure_lookahead()
 
 	countdown_left_sec = get_countdown_sec()
+	practice_mode_running = false
 	if countdown_left_sec > 0.0:
 		countdown_running = true
 		timer_running = false
@@ -940,10 +1008,36 @@ func start_round() -> void:
 	update_start_button_shortcut_label()
 	refresh_ui()
 
+# 計測なしでタイピングを開始する。
+func start_round_without_measurement() -> void:
+	hide_result_overlay()
+	if kana_stream.is_empty():
+		ensure_lookahead()
+
+	countdown_running = false
+	countdown_left_sec = 0.0
+	timer_running = false
+	practice_mode_running = true
+	time_left_sec = get_round_time_sec()
+	round_start_msec = 0
+	input_events.clear()
+
+	if has_ui_node("start_button"):
+		(ui_node("start_button") as Button).disabled = true
+	if has_ui_node("start_without_measure_button"):
+		(ui_node("start_without_measure_button") as Button).disabled = true
+
+	update_timer_label()
+	update_measure_label()
+	update_timer_locked_buttons()
+	update_start_button_shortcut_label()
+	refresh_ui()
+
 # 本計測を開始し、計測残り時間を初期化する。
 func begin_measurement() -> void:
 	countdown_running = false
 	timer_running = true
+	practice_mode_running = false
 	time_left_sec = get_round_time_sec()
 	round_start_msec = Time.get_ticks_msec()
 	input_events.clear()
@@ -970,7 +1064,7 @@ func update_timer(delta: float) -> void:
 		finish_round(true)
 
 # タイマー終了時の入力停止とUI状態復帰を行う。
-func finish_round(time_up: bool, reset_after_finish: bool = true) -> void:
+func finish_round(time_up: bool, reset_after_finish: bool = true, over_miss_limit: bool = false) -> void:
 	var chars := typed_target_chars
 	var misses := miss_count
 	var score := chars - misses
@@ -979,17 +1073,22 @@ func finish_round(time_up: bool, reset_after_finish: bool = true) -> void:
 	countdown_running = false
 	countdown_left_sec = 0.0
 	timer_running = false
+	practice_mode_running = false
 	if time_up:
 		time_left_sec = 0.0
 	if has_ui_node("start_button"):
 		(ui_node("start_button") as Button).disabled = false
+	if has_ui_node("start_without_measure_button"):
+		(ui_node("start_without_measure_button") as Button).disabled = false
 	update_timer_label()
 	update_measure_label()
 	update_timer_locked_buttons()
 	update_start_button_shortcut_label()
 	if time_up:
 		save_record(chars, misses, score, measured_seconds)
-		show_result_overlay(chars, misses, score)
+		show_result_overlay(chars, misses, score, measured_seconds, false)
+	elif over_miss_limit:
+		show_result_overlay(chars, misses, score, measured_seconds, true)
 	if reset_after_finish:
 		reset_state()
 		ensure_lookahead()
@@ -1066,7 +1165,7 @@ func ensure_records_dir() -> bool:
 
 # 計測中は各種設定・遷移系UIを非表示かつ無効化する。
 func update_timer_locked_buttons() -> void:
-	var locked := timer_running or countdown_running
+	var locked := timer_running or countdown_running or practice_mode_running
 	
 	if has_ui_node("exit_button"):
 		var btn_exit := ui_node("exit_button") as Control
@@ -1092,6 +1191,12 @@ func update_timer_locked_buttons() -> void:
 		if btn_records is BaseButton:
 			(btn_records as BaseButton).disabled = locked
 
+	if has_ui_node("start_without_measure_button"):
+		var start_without_btn := ui_node("start_without_measure_button") as Control
+		start_without_btn.visible = true
+		if start_without_btn is BaseButton:
+			(start_without_btn as BaseButton).disabled = timer_running or countdown_running
+
 	if has_ui_node("timer_mode_option"):
 		var timer_mode := ui_node("timer_mode_option") as Control
 		timer_mode.visible = not locked
@@ -1112,6 +1217,15 @@ func update_timer_locked_buttons() -> void:
 
 	if has_ui_node("countdown_label"):
 		(ui_node("countdown_label") as Control).visible = not locked
+
+	if has_ui_node("allow_miss_spinbox"):
+		var allow_miss_spin := ui_node("allow_miss_spinbox") as Control
+		allow_miss_spin.visible = not locked
+		if allow_miss_spin is BaseButton:
+			(allow_miss_spin as BaseButton).disabled = locked
+
+	if has_ui_node("allow_miss_label"):
+		(ui_node("allow_miss_label") as Control).visible = not locked
 
 	if has_ui_node("font_size_spinbox"):
 		var font_spin := ui_node("font_size_spinbox") as Control
@@ -1170,8 +1284,10 @@ func update_measure_label() -> void:
 		label.append_text("開始カウントダウン中")
 	elif timer_running:
 		label.append_text("計測中(Escで停止)")
+	elif practice_mode_running:
+		label.append_text("非計測タイピング中(Escで停止)")
 	else:
-		label.append_text("計測停止中(Spaceで開始)")
+		label.append_text("待機中(Space=計測開始, Enter=非計測開始)")
 
 # target_text 系で実際に数える文字数（区切り記号を除外）を範囲で返す。
 func count_target_chars_in_range(start_idx: int, end_idx: int) -> int:
@@ -1194,6 +1310,9 @@ func setup_result_overlay() -> void:
 		return
 	if result_overlay != null:
 		return
+	var ui_root := ui_node("main_ui") as Control
+	if ui_root == null:
+		return
 
 	result_overlay = Control.new()
 	result_overlay.name = "result_overlay"
@@ -1206,7 +1325,7 @@ func setup_result_overlay() -> void:
 	result_overlay.offset_right = 0.0
 	result_overlay.offset_bottom = 0.0
 	result_overlay.visible = false
-	add_child(result_overlay)
+	ui_root.add_child(result_overlay)
 
 	var backdrop := ColorRect.new()
 	backdrop.color = Color(0.0, 0.0, 0.0, 0.45)
@@ -1222,13 +1341,13 @@ func setup_result_overlay() -> void:
 
 	var panel := PanelContainer.new()
 	panel.anchor_left = 0.5
-	panel.anchor_top = 0.5
+	panel.anchor_top = 0.0
 	panel.anchor_right = 0.5
-	panel.anchor_bottom = 0.5
-	panel.offset_left = -180.0
-	panel.offset_top = -120.0
-	panel.offset_right = 180.0
-	panel.offset_bottom = 120.0
+	panel.anchor_bottom = 0.0
+	panel.offset_left = -260.0
+	panel.offset_top = 24.0
+	panel.offset_right = 260.0
+	panel.offset_bottom = 424.0
 	result_overlay.add_child(panel)
 
 	var vbox := VBoxContainer.new()
@@ -1240,6 +1359,11 @@ func setup_result_overlay() -> void:
 	title.text = "計測結果"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
+
+	result_message_label = Label.new()
+	result_message_label.text = ""
+	result_message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(result_message_label)
 
 	var chars_label := Label.new()
 	chars_label.text = "入力文字数:"
@@ -1262,25 +1386,132 @@ func setup_result_overlay() -> void:
 	result_value_score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	vbox.add_child(result_value_score_label)
 
+	var sec_label := Label.new()
+	sec_label.text = "計測秒:"
+	vbox.add_child(sec_label)
+	result_value_seconds_label = Label.new()
+	result_value_seconds_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	vbox.add_child(result_value_seconds_label)
+
+	var sps_avg_label := Label.new()
+	sps_avg_label.text = "スコア/秒 平均:"
+	vbox.add_child(sps_avg_label)
+	result_value_sps_avg_label = Label.new()
+	result_value_sps_avg_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	vbox.add_child(result_value_sps_avg_label)
+
+	var sps_max_label := Label.new()
+	sps_max_label.text = "スコア/秒 最高:"
+	vbox.add_child(sps_max_label)
+	result_value_sps_max_label = Label.new()
+	result_value_sps_max_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	vbox.add_child(result_value_sps_max_label)
+
+	var sps_min_label := Label.new()
+	sps_min_label.text = "スコア/秒 最低:"
+	vbox.add_child(sps_min_label)
+	result_value_sps_min_label = Label.new()
+	result_value_sps_min_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	vbox.add_child(result_value_sps_min_label)
+
+	var miss_rate_label := Label.new()
+	miss_rate_label.text = "ミス率:"
+	vbox.add_child(miss_rate_label)
+	result_value_miss_rate_label = Label.new()
+	result_value_miss_rate_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	vbox.add_child(result_value_miss_rate_label)
+
+	var odai_label := Label.new()
+	odai_label.text = "お題:"
+	vbox.add_child(odai_label)
+	result_value_odai_label = Label.new()
+	result_value_odai_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	vbox.add_child(result_value_odai_label)
+
+	var layout_label := Label.new()
+	layout_label.text = "配列:"
+	vbox.add_child(layout_label)
+	result_value_layout_label = Label.new()
+	result_value_layout_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	vbox.add_child(result_value_layout_label)
+
 	var close_button := Button.new()
 	close_button.text = "閉じる"
 	close_button.pressed.connect(_on_result_close_button_pressed)
 	vbox.add_child(close_button)
 
 # 結果オーバーレイにスコア情報を反映して表示する。
-func show_result_overlay(chars: int, misses: int, score: int) -> void:
+func show_result_overlay(chars: int, misses: int, score: int, measured_seconds: float, over_miss_limit: bool) -> void:
 	if result_overlay == null:
 		setup_result_overlay()
 	if result_overlay == null:
 		return
-	if result_value_chars_label == null or result_value_miss_label == null or result_value_score_label == null:
+	if result_message_label == null or result_value_chars_label == null or result_value_miss_label == null or result_value_score_label == null:
 		return
+	if result_value_seconds_label == null or result_value_sps_avg_label == null or result_value_sps_max_label == null or result_value_sps_min_label == null:
+		return
+	if result_value_miss_rate_label == null or result_value_odai_label == null or result_value_layout_label == null:
+		return
+
+	var stats := compute_score_per_sec_stats()
+	var miss_rate := 0.0
+	if chars > 0:
+		miss_rate = float(misses) / float(chars)
+
+	if over_miss_limit:
+		result_message_label.text = "許容ミス数を超えたため終了しました"
+		result_message_label.modulate = Color(1.0, 0.35, 0.35, 1.0)
+	else:
+		result_message_label.text = ""
+		result_message_label.modulate = Color(1.0, 1.0, 1.0, 1.0)
 
 	result_value_chars_label.text = str(chars)
 	result_value_miss_label.text = str(misses)
 	result_value_score_label.text = str(score)
+	result_value_seconds_label.text = "%.2f" % measured_seconds
+	result_value_sps_avg_label.text = "%.2f" % float(stats.get("avg", 0.0))
+	result_value_sps_max_label.text = "%.2f" % float(stats.get("max", 0.0))
+	result_value_sps_min_label.text = "%.2f" % float(stats.get("min", 0.0))
+	result_value_miss_rate_label.text = "%.2f%%" % (miss_rate * 100.0)
+	result_value_odai_label.text = current_odai_path.get_file()
+	result_value_layout_label.text = current_layout_path.get_file()
 	result_overlay.visible = true
 	update_start_button_shortcut_label()
+
+# 入力イベントからスコア/秒の平均・最高・最低を計算する。
+func compute_score_per_sec_stats() -> Dictionary:
+	if input_events.is_empty():
+		return {"avg": 0.0, "max": 0.0, "min": 0.0}
+
+	var miss := 0
+	var values: Array[float] = []
+	for i in range(input_events.size()):
+		var ev := input_events[i] as Dictionary
+		if not bool(ev.get("ok", false)):
+			miss += 1
+		var elapsed_sec := float(int(ev.get("t_ms", 0))) / 1000.0
+		if elapsed_sec <= 0.0:
+			continue
+		var typed := i + 1
+		var event_score := typed - miss
+		values.append(float(event_score) / elapsed_sec)
+
+	if values.is_empty():
+		return {"avg": 0.0, "max": 0.0, "min": 0.0}
+
+	var sum := 0.0
+	var max_v := values[0]
+	var min_v := values[0]
+	for v in values:
+		sum += v
+		max_v = maxf(max_v, v)
+		min_v = minf(min_v, v)
+
+	return {
+		"avg": sum / float(values.size()),
+		"max": max_v,
+		"min": min_v,
+	}
 
 # 結果オーバーレイを非表示にする。
 func hide_result_overlay() -> void:
@@ -1304,6 +1535,7 @@ func init_stream() -> void:
 				update_odai_label()
 	if odai_lines.is_empty():
 		push_error("No Japanese odai lines loaded")
+	odai_cycle_deck.clear()
 	
 	reset_state()
 	ensure_lookahead()
@@ -1342,16 +1574,32 @@ func ensure_lookahead() -> void:
 func pick_typable_sentence_data() -> Dictionary:
 	if odai_lines.is_empty():
 		return {}
-	
-	var max_try := mini(odai_lines.size() * 2, 300)
-	for _i in range(max_try):
-		var line: String = odai_lines.pick_random()
-		var data := get_or_parse_sentence_data(line)
-		if bool(data.get("typable", false)):
-			return data
-	
+
+	var refill_count := 0
+	while refill_count < 2:
+		if odai_cycle_deck.is_empty():
+			rebuild_odai_cycle_deck()
+			refill_count += 1
+			if odai_cycle_deck.is_empty():
+				break
+
+		while not odai_cycle_deck.is_empty():
+			var line: String = odai_cycle_deck.pop_back()
+			var data := get_or_parse_sentence_data(line)
+			if bool(data.get("typable", false)):
+				return data
+
 	push_error("No typable sentence found in odai file")
 	return {}
+
+# 入力可能なお題行だけを1巡デッキとして構築し、順序をシャッフルする。
+func rebuild_odai_cycle_deck() -> void:
+	odai_cycle_deck.clear()
+	for line in odai_lines:
+		var data := get_or_parse_sentence_data(line)
+		if bool(data.get("typable", false)):
+			odai_cycle_deck.append(line)
+	odai_cycle_deck.shuffle()
 
 # お題1行をキャッシュ利用で解析し、入力可能フラグ付きで返す。
 func get_or_parse_sentence_data(line: String) -> Dictionary:
@@ -1558,6 +1806,9 @@ func on_correct(input_char: String, transition: Dictionary, output: String) -> v
 func on_miss(input_char: String) -> void:
 	set_key_guide_flash(input_char, false)
 	miss_count += 1
+	if (timer_running or practice_mode_running) and miss_count > get_allow_miss_limit():
+		finish_round(false, true, true)
+		return
 	miss_timer = MISS_FLASH_TIME
 	refresh_ui_light_no_cursor()
 

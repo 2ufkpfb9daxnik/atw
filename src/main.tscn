@@ -74,6 +74,10 @@ text = "記録"
 layout_mode = 2
 text = "開始"
 
+[node name="start_without_measure_button" type="Button" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+text = "計測しないで開始"
+
 [node name="exit_button" type="Button" parent="main_ui/layout_root/main_hbox/left_panel"]
 layout_mode = 2
 text = "終了"
@@ -91,6 +95,14 @@ text = "カウントダウン"
 fit_content = true
 
 [node name="countdown_spinbox" type="SpinBox" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+
+[node name="allow_miss_label" type="RichTextLabel" parent="main_ui/layout_root/main_hbox/left_panel"]
+layout_mode = 2
+text = "許容ミス数"
+fit_content = true
+
+[node name="allow_miss_spinbox" type="SpinBox" parent="main_ui/layout_root/main_hbox/left_panel"]
 layout_mode = 2
 
 [node name="change_layout" type="Button" parent="main_ui/layout_root/main_hbox/left_panel"]

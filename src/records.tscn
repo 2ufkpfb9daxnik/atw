@@ -30,3 +30,7 @@ text = "戻る"
 [node name="eval_button" type="Button" parent="top_bar"]
 layout_mode = 2
 text = "評価"
+
+[node name="open_records_file_button" type="Button" parent="top_bar"]
+layout_mode = 2
+text = "records.jsonlを開く"

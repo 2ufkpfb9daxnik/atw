@@ -2,7 +2,7 @@
 
 [github pages](https://2ufkpfb9daxnik.github.io/atw/)
 
-[web版](https://2ufkpfb9daxnik.github.io/atw/atw.html)
+[web版(一部文字化けあり)](https://2ufkpfb9daxnik.github.io/atw/atw.html)
 
 お題のdefault.txtは隙を見て更新予定です
 
