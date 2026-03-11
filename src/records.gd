@@ -11,6 +11,8 @@ const GRAPH_MARGIN_BOTTOM := 18.0
 const GRAPH_ZOOM_MIN := 0.25
 const GRAPH_ZOOM_MAX := 8.0
 const GRAPH_ZOOM_STEP := 1.25
+const DEFAULT_LIST_PAGE_SIZE := 20
+const PAGE_JUMP_STEPS := [16, 8, 4, 2, 1]
 
 var list_scroll: ScrollContainer
 var list_vbox: VBoxContainer
@@ -68,6 +70,32 @@ var graph_zoom := 1.0
 var graph_dragging := false
 var list_sort_key := "created_at"
 var list_sort_desc := true
+var list_current_page := 1
+var list_page_size := DEFAULT_LIST_PAGE_SIZE
+var list_filter_state := {
+	"date_from": "",
+	"date_to": "",
+	"score_min": "",
+	"score_max": "",
+	"seconds_min": "",
+	"seconds_max": "",
+	"sps_min": "",
+	"sps_max": "",
+	"typed_min": "",
+	"typed_max": "",
+	"miss_min": "",
+	"miss_max": "",
+	"miss_rate_min": "",
+	"miss_rate_max": "",
+	"odai_regex": "",
+	"layout_regex": "",
+}
+var list_advanced_query := ""
+var list_filter_status_message := ""
+var list_filter_inputs: Dictionary = {}
+var list_filter_dialog: AcceptDialog
+var list_advanced_dialog: AcceptDialog
+var list_advanced_query_edit: TextEdit
 
 # 記録画面を初期化し、一覧/詳細UIを構築する。
 func _ready() -> void:
@@ -83,6 +111,8 @@ func _ready() -> void:
 	build_list_ui()
 	build_detail_ui()
 	build_analytics_ui()
+	build_filter_dialog()
+	build_advanced_search_dialog()
 	visibility_changed.connect(_on_visibility_changed)
 	set_process_unhandled_input(true)
 	update_records_shortcut_labels()
@@ -651,17 +681,284 @@ func refresh_records_list() -> void:
 	for c in list_vbox.get_children():
 		c.queue_free()
 
+	var all_records := load_records_jsonl()
+	var records := sort_records_for_list(apply_active_list_filters(all_records))
+	var total_records := records.size()
+	var all_records_count := all_records.size()
+	var total_pages := get_total_pages(total_records)
+	list_current_page = clampi(list_current_page, 1, total_pages)
+
+	add_pagination_block(total_records, all_records_count, total_pages, true)
 	add_header_row()
 
-	var records := sort_records_for_list(load_records_jsonl())
 	if records.is_empty():
 		var empty_label := Label.new()
 		empty_label.text = "記録がありません"
 		list_vbox.add_child(empty_label)
+		add_pagination_block(total_records, all_records_count, total_pages, false)
 		return
 
-	for rec in records:
-		add_record_row(rec)
+	var page_start := (list_current_page - 1) * list_page_size
+	var page_end := mini(page_start + list_page_size, total_records)
+	for i in range(page_start, page_end):
+		add_record_row(records[i])
+
+	add_pagination_block(total_records, all_records_count, total_pages, false)
+
+# 総件数と1ページ件数から総ページ数を返す。
+func get_total_pages(total_records: int) -> int:
+	if total_records <= 0:
+		return 1
+	return maxi(1, int(ceil(float(total_records) / float(maxi(list_page_size, 1)))))
+
+# 一覧のページ操作ブロックを追加する。
+func add_pagination_block(total_records: int, all_records_count: int, total_pages: int, include_page_size_form: bool) -> void:
+	if list_vbox == null:
+		return
+
+	if include_page_size_form:
+		var config_row := HBoxContainer.new()
+		config_row.add_theme_constant_override("separation", 8)
+		config_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+		var page_size_label := Label.new()
+		page_size_label.text = "1ページ表示件数"
+		config_row.add_child(page_size_label)
+
+		var page_size_spin := SpinBox.new()
+		page_size_spin.min_value = 1
+		page_size_spin.max_value = 1000000
+		page_size_spin.step = 1
+		page_size_spin.rounded = true
+		page_size_spin.value = list_page_size
+		page_size_spin.custom_minimum_size = Vector2(96, 0)
+		page_size_spin.value_changed.connect(_on_page_size_changed)
+		config_row.add_child(page_size_spin)
+
+		var filter_button := Button.new()
+		filter_button.text = "フィルタ" if not has_active_list_filter() else "フィルタ*"
+		filter_button.pressed.connect(_on_filter_button_pressed)
+		config_row.add_child(filter_button)
+
+		var advanced_button := Button.new()
+		advanced_button.text = "高度な検索" if list_advanced_query.strip_edges().is_empty() else "高度な検索*"
+		advanced_button.pressed.connect(_on_advanced_search_button_pressed)
+		config_row.add_child(advanced_button)
+
+		var clear_button := Button.new()
+		clear_button.text = "条件クリア"
+		clear_button.pressed.connect(_on_clear_filter_button_pressed)
+		config_row.add_child(clear_button)
+
+		var spacer := Control.new()
+		spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		config_row.add_child(spacer)
+
+		var config_info := Label.new()
+		config_info.text = "表示%d件 / 全%d件  (%dページ)" % [total_records, all_records_count, total_pages]
+		if not list_filter_status_message.is_empty():
+			config_info.text += "  %s" % list_filter_status_message
+		config_row.add_child(config_info)
+		list_vbox.add_child(config_row)
+
+	add_pagination_row(total_pages)
+
+	var sep := HSeparator.new()
+	list_vbox.add_child(sep)
+
+# フィルタ条件入力ダイアログを構築する。
+func build_filter_dialog() -> void:
+	list_filter_dialog = AcceptDialog.new()
+	list_filter_dialog.title = "フィルタ"
+	list_filter_dialog.min_size = Vector2i(720, 460)
+	add_child(list_filter_dialog)
+	list_filter_dialog.confirmed.connect(_on_filter_dialog_confirmed)
+
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 6)
+	list_filter_dialog.add_child(root)
+
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 6)
+	root.add_child(grid)
+
+	add_filter_input_pair(grid, "日時(開始)", "date_from")
+	add_filter_input_pair(grid, "日時(終了)", "date_to")
+	add_filter_input_pair(grid, "スコア最小", "score_min")
+	add_filter_input_pair(grid, "スコア最大", "score_max")
+	add_filter_input_pair(grid, "計測秒最小", "seconds_min")
+	add_filter_input_pair(grid, "計測秒最大", "seconds_max")
+	add_filter_input_pair(grid, "スコア/秒最小", "sps_min")
+	add_filter_input_pair(grid, "スコア/秒最大", "sps_max")
+	add_filter_input_pair(grid, "入力文字最小", "typed_min")
+	add_filter_input_pair(grid, "入力文字最大", "typed_max")
+	add_filter_input_pair(grid, "ミス数最小", "miss_min")
+	add_filter_input_pair(grid, "ミス数最大", "miss_max")
+	add_filter_input_pair(grid, "ミス率%最小", "miss_rate_min")
+	add_filter_input_pair(grid, "ミス率%最大", "miss_rate_max")
+	add_filter_input_pair(grid, "お題ファイル名", "odai_regex")
+	add_filter_input_pair(grid, "配列ファイル名", "layout_regex")
+
+	var hint := Label.new()
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.text = "空欄は未指定として扱います。日時は created_at の文字列比較で判定します。日付のみで絞る場合は YYYY-MM-DD、時刻まで絞る場合は保存形式に合わせて入力してください。お題ファイル名・配列ファイル名は正規表現で指定できます。"
+	root.add_child(hint)
+
+# 高度な検索入力ダイアログを構築する。
+func build_advanced_search_dialog() -> void:
+	list_advanced_dialog = AcceptDialog.new()
+	list_advanced_dialog.title = "高度な検索"
+	list_advanced_dialog.dialog_text = "AND/OR で文字列条件を組み合わせます。"
+	list_advanced_dialog.min_size = Vector2i(720, 280)
+	add_child(list_advanced_dialog)
+	list_advanced_dialog.confirmed.connect(_on_advanced_search_confirmed)
+
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 8)
+	list_advanced_dialog.add_child(root)
+
+	list_advanced_query_edit = TextEdit.new()
+	list_advanced_query_edit.custom_minimum_size = Vector2(0, 140)
+	list_advanced_query_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	root.add_child(list_advanced_query_edit)
+
+	var hint := Label.new()
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.text = "例: 2026-03-01 AND qwerty OR \"test_jp.txt\" AND miss\n対象は日時/お題/配列/数値などを1行文字列化した内容です。AND が OR より優先されます。"
+	root.add_child(hint)
+
+# フィルタ入力ラベル+フォームを1組追加する。
+func add_filter_input_pair(grid: GridContainer, label_text: String, key: String) -> void:
+	var label := Label.new()
+	label.text = label_text
+	grid.add_child(label)
+	var input := LineEdit.new()
+	input.placeholder_text = "未指定"
+	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_child(input)
+	list_filter_inputs[key] = input
+
+# フィルタボタン押下でダイアログを開く。
+func _on_filter_button_pressed() -> void:
+	if list_filter_dialog == null:
+		return
+	for key in list_filter_inputs.keys():
+		var input := list_filter_inputs[key] as LineEdit
+		if input != null:
+			input.text = String(list_filter_state.get(String(key), ""))
+	list_filter_dialog.popup_centered_ratio(0.7)
+
+# 高度な検索ボタン押下でダイアログを開く。
+func _on_advanced_search_button_pressed() -> void:
+	if list_advanced_dialog == null:
+		return
+	if list_advanced_query_edit != null:
+		list_advanced_query_edit.text = list_advanced_query
+	list_advanced_dialog.popup_centered_ratio(0.6)
+
+# フィルタ確定時に状態を保存して一覧を更新する。
+func _on_filter_dialog_confirmed() -> void:
+	for key in list_filter_inputs.keys():
+		var input := list_filter_inputs[key] as LineEdit
+		if input != null:
+			list_filter_state[String(key)] = input.text.strip_edges()
+	list_current_page = 1
+	refresh_records_list()
+
+# 高度な検索確定時に状態を保存して一覧を更新する。
+func _on_advanced_search_confirmed() -> void:
+	if list_advanced_query_edit != null:
+		list_advanced_query = list_advanced_query_edit.text.strip_edges()
+	list_current_page = 1
+	refresh_records_list()
+
+# 条件クリアボタン押下でフィルタ/高度な検索をすべて解除する。
+func _on_clear_filter_button_pressed() -> void:
+	for key in list_filter_state.keys():
+		list_filter_state[String(key)] = ""
+	list_advanced_query = ""
+	list_filter_status_message = ""
+	list_current_page = 1
+	refresh_records_list()
+
+# 何らかのフィルタ条件が有効かを返す。
+func has_active_list_filter() -> bool:
+	for key in list_filter_state.keys():
+		if not String(list_filter_state[key]).strip_edges().is_empty():
+			return true
+	return false
+
+# ページ番号列（先頭/最終固定 + 2のべき間隔）を描画する。
+func add_pagination_row(total_pages: int) -> void:
+	if list_vbox == null:
+		return
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var pages := build_visible_pages(total_pages)
+	for page in pages:
+		add_page_button(row, page)
+
+	list_vbox.add_child(row)
+
+# 表示すべきページ番号配列を昇順で返す。
+func build_visible_pages(total_pages: int) -> Array[int]:
+	var clamped_total := maxi(total_pages, 1)
+	var pages: Array[int] = [1, clamped_total, list_current_page]
+	for step in PAGE_JUMP_STEPS:
+		var step_i := int(step)
+		var left := list_current_page - step_i
+		var right := list_current_page + step_i
+		if left >= 1:
+			pages.append(left)
+		if right <= clamped_total:
+			pages.append(right)
+
+	pages = unique_sorted_pages(pages)
+	return pages
+
+# 重複を除去し、昇順ソートして返す。
+func unique_sorted_pages(pages: Array[int]) -> Array[int]:
+	var seen: Dictionary = {}
+	for page in pages:
+		seen[page] = true
+	var out: Array[int] = []
+	for key in seen.keys():
+		out.append(int(key))
+	out.sort()
+	return out
+
+# 1つのページボタンを追加する。現在ページは強調表示する。
+func add_page_button(row: HBoxContainer, page: int) -> void:
+	var button := Button.new()
+	button.focus_mode = Control.FOCUS_NONE
+	if page == list_current_page:
+		button.text = "【%d】" % page
+		button.disabled = true
+	else:
+		button.text = str(page)
+		button.pressed.connect(_on_page_button_pressed.bind(page))
+	row.add_child(button)
+
+# ページボタン押下で対象ページへ移動する。
+func _on_page_button_pressed(page: int) -> void:
+	if page == list_current_page:
+		return
+	list_current_page = maxi(page, 1)
+	refresh_records_list()
+
+# 1ページあたり表示件数の入力変更を反映する。
+func _on_page_size_changed(value: float) -> void:
+	var new_size := maxi(int(round(value)), 1)
+	if new_size == list_page_size:
+		return
+	list_page_size = new_size
+	list_current_page = 1
+	refresh_records_list()
 
 # 一覧ヘッダ行を追加する。
 func add_header_row() -> void:
@@ -709,6 +1006,7 @@ func _on_sort_header_pressed(sort_key: String) -> void:
 	else:
 		list_sort_key = sort_key
 		list_sort_desc = true
+	list_current_page = 1
 	refresh_records_list()
 
 # 現在のソート設定に基づいてレコード配列を並べ替える。
@@ -716,6 +1014,236 @@ func sort_records_for_list(records: Array[Dictionary]) -> Array[Dictionary]:
 	var sorted: Array[Dictionary] = records.duplicate()
 	sorted.sort_custom(Callable(self , "_compare_record_for_list"))
 	return sorted
+
+# 現在のフィルタ条件と高度な検索を適用した配列を返す。
+func apply_active_list_filters(records: Array[Dictionary]) -> Array[Dictionary]:
+	list_filter_status_message = ""
+	var invalid_fields: Array[String] = []
+
+	var score_min: Variant = parse_optional_float_bound(String(list_filter_state.get("score_min", "")), "score_min", invalid_fields)
+	var score_max: Variant = parse_optional_float_bound(String(list_filter_state.get("score_max", "")), "score_max", invalid_fields)
+	var seconds_min: Variant = parse_optional_float_bound(String(list_filter_state.get("seconds_min", "")), "seconds_min", invalid_fields)
+	var seconds_max: Variant = parse_optional_float_bound(String(list_filter_state.get("seconds_max", "")), "seconds_max", invalid_fields)
+	var sps_min: Variant = parse_optional_float_bound(String(list_filter_state.get("sps_min", "")), "sps_min", invalid_fields)
+	var sps_max: Variant = parse_optional_float_bound(String(list_filter_state.get("sps_max", "")), "sps_max", invalid_fields)
+	var typed_min: Variant = parse_optional_float_bound(String(list_filter_state.get("typed_min", "")), "typed_min", invalid_fields)
+	var typed_max: Variant = parse_optional_float_bound(String(list_filter_state.get("typed_max", "")), "typed_max", invalid_fields)
+	var miss_min: Variant = parse_optional_float_bound(String(list_filter_state.get("miss_min", "")), "miss_min", invalid_fields)
+	var miss_max: Variant = parse_optional_float_bound(String(list_filter_state.get("miss_max", "")), "miss_max", invalid_fields)
+	var miss_rate_min: Variant = parse_optional_float_bound(String(list_filter_state.get("miss_rate_min", "")), "miss_rate_min", invalid_fields)
+	var miss_rate_max: Variant = parse_optional_float_bound(String(list_filter_state.get("miss_rate_max", "")), "miss_rate_max", invalid_fields)
+
+	var odai_regex := compile_optional_regex(String(list_filter_state.get("odai_regex", "")), "odai_regex")
+	var layout_regex := compile_optional_regex(String(list_filter_state.get("layout_regex", "")), "layout_regex")
+
+	if not invalid_fields.is_empty():
+		list_filter_status_message = "数値条件を無視: %s" % ", ".join(invalid_fields)
+
+	var out: Array[Dictionary] = []
+	for rec in records:
+		var created_at := String(rec.get("created_at", ""))
+		if not match_datetime_range(created_at, String(list_filter_state.get("date_from", "")), String(list_filter_state.get("date_to", ""))):
+			continue
+
+		var score := float(int(rec.get("score", 0)))
+		var seconds := get_record_seconds(rec)
+		var typed := float(int(rec.get("typed_chars", 0)))
+		var miss := float(int(rec.get("miss_count", 0)))
+		var sps := 0.0
+		if seconds > 0.0:
+			sps = score / seconds
+		var miss_rate_percent := 0.0
+		if typed > 0.0:
+			miss_rate_percent = (miss / typed) * 100.0
+
+		if not value_in_optional_range(score, score_min, score_max):
+			continue
+		if not value_in_optional_range(seconds, seconds_min, seconds_max):
+			continue
+		if not value_in_optional_range(sps, sps_min, sps_max):
+			continue
+		if not value_in_optional_range(typed, typed_min, typed_max):
+			continue
+		if not value_in_optional_range(miss, miss_min, miss_max):
+			continue
+		if not value_in_optional_range(miss_rate_percent, miss_rate_min, miss_rate_max):
+			continue
+
+		var odai_name := String(rec.get("odai_path", "")).get_file()
+		if odai_regex != null and odai_regex.search(odai_name) == null:
+			continue
+		var layout_name := String(rec.get("layout_path", "")).get_file()
+		if layout_regex != null and layout_regex.search(layout_name) == null:
+			continue
+
+		if not matches_advanced_query(rec, list_advanced_query):
+			continue
+
+		out.append(rec)
+
+	return out
+
+# 空文字なら null、数値なら float、不正なら invalid_fields にキーを積んで null を返す。
+func parse_optional_float_bound(text: String, key: String, invalid_fields: Array[String]) -> Variant:
+	var t := text.strip_edges()
+	if t.is_empty():
+		return null
+	if not t.is_valid_float() and not t.is_valid_int():
+		invalid_fields.append(key)
+		return null
+	return float(t)
+
+# 空文字なら null、正規表現コンパイル成功で RegEx、失敗時はメッセージを残して null。
+func compile_optional_regex(pattern: String, key: String) -> RegEx:
+	var p := pattern.strip_edges()
+	if p.is_empty():
+		return null
+	var re := RegEx.new()
+	var err := re.compile(p)
+	if err != OK:
+		if list_filter_status_message.is_empty():
+			list_filter_status_message = "%s の正規表現が不正" % key
+		else:
+			list_filter_status_message += " / %s の正規表現が不正" % key
+		return null
+	return re
+
+# 片側未指定を許容する範囲判定。
+func value_in_optional_range(value: float, min_v: Variant, max_v: Variant) -> bool:
+	if min_v != null and value < float(min_v):
+		return false
+	if max_v != null and value > float(max_v):
+		return false
+	return true
+
+# created_at を文字列範囲として判定する。日付のみ入力時は先頭10文字で比較する。
+func match_datetime_range(created_at: String, date_from: String, date_to: String) -> bool:
+	var from_text := date_from.strip_edges()
+	if not from_text.is_empty():
+		if from_text.length() <= 10:
+			var rec_day := created_at.substr(0, mini(created_at.length(), 10))
+			if rec_day < from_text:
+				return false
+		else:
+			if created_at < from_text:
+				return false
+
+	var to_text := date_to.strip_edges()
+	if not to_text.is_empty():
+		if to_text.length() <= 10:
+			var rec_day2 := created_at.substr(0, mini(created_at.length(), 10))
+			if rec_day2 > to_text:
+				return false
+		else:
+			if created_at > to_text:
+				return false
+	return true
+
+# 高度な検索文字列を AND/OR で評価する。AND 優先、引用符で空白含み語句を指定できる。
+func matches_advanced_query(rec: Dictionary, query: String) -> bool:
+	var q := query.strip_edges()
+	if q.is_empty():
+		return true
+	var terms := tokenize_advanced_query(q)
+	if terms.is_empty():
+		return true
+
+	var haystack := build_record_search_text(rec)
+	var groups: Array[Array] = []
+	var current_group: Array = []
+
+	for term in terms:
+		var t := String(term)
+		var upper := t.to_upper()
+		if upper == "OR":
+			if not current_group.is_empty():
+				groups.append(current_group.duplicate())
+				current_group.clear()
+			continue
+		if upper == "AND":
+			continue
+		current_group.append(t.to_lower())
+
+	if not current_group.is_empty():
+		groups.append(current_group)
+
+	if groups.is_empty():
+		return true
+
+	for group in groups:
+		var all_ok := true
+		for word in group:
+			if haystack.find(String(word)) < 0:
+				all_ok = false
+				break
+		if all_ok:
+			return true
+	return false
+
+# 高度な検索のトークン列を作る。"quoted phrase" に対応する。
+func tokenize_advanced_query(query: String) -> Array[String]:
+	var out: Array[String] = []
+	var i := 0
+	var n := query.length()
+	while i < n:
+		while i < n and query[i] == " ":
+			i += 1
+		if i >= n:
+			break
+		if query[i] == "\"":
+			i += 1
+			var start := i
+			while i < n and query[i] != "\"":
+				i += 1
+			var quoted := query.substr(start, i - start)
+			if not quoted.is_empty():
+				out.append(quoted)
+			if i < n and query[i] == "\"":
+				i += 1
+			continue
+		var start2 := i
+		while i < n and query[i] != " ":
+			i += 1
+		var token := query.substr(start2, i - start2)
+		if not token.is_empty():
+			out.append(token)
+	return out
+
+# レコードを検索用の1本文字列へ連結する。
+func build_record_search_text(rec: Dictionary) -> String:
+	var created_at := String(rec.get("created_at", ""))
+	var score := int(rec.get("score", 0))
+	var typed := int(rec.get("typed_chars", 0))
+	var miss := int(rec.get("miss_count", 0))
+	var seconds := get_record_seconds(rec)
+	var sps := 0.0
+	if seconds > 0.0:
+		sps = float(score) / seconds
+	var miss_rate := 0.0
+	if typed > 0:
+		miss_rate = (float(miss) / float(typed)) * 100.0
+
+	var odai_path := String(rec.get("odai_path", ""))
+	var layout_path := String(rec.get("layout_path", ""))
+	var odai_name := odai_path.get_file()
+	var layout_name := layout_path.get_file()
+
+	var text := "%s %s %s %s %s %s %.6f %.6f %.6f %s %s %s %s" % [
+		created_at,
+		str(score),
+		str(typed),
+		str(miss),
+		("%.6f" % seconds),
+		("%.6f" % sps),
+		seconds,
+		sps,
+		miss_rate,
+		odai_path,
+		odai_name,
+		layout_path,
+		layout_name,
+	]
+	return text.to_lower()
 
 # 一覧ソート比較。主キー同値時は日時の新しい順を優先する。
 func _compare_record_for_list(a: Dictionary, b: Dictionary) -> bool:
