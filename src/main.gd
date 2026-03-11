@@ -17,6 +17,8 @@ const RECORDS_FILE_PATH := "user://records/records.jsonl"
 const APP_SETTINGS_PATH := "user://app_settings.json"
 const UI_FONT_PRIMARY_PATH := "res://fonts/NotoSansJP-Regular.ttf"
 const UI_FONT_FALLBACK_PATH := "res://dist/fonts/NotoSansJP-Regular.ttf"
+const UI_FONT_BASE_SIZE := 25
+const UI_FONT_SIZE_KEYS := ["font_size", "normal_font_size", "bold_font_size", "italics_font_size", "mono_font_size"]
 
 var miss_timer := 0.0
 var current_layout_path := LAYOUT_PATH
@@ -73,7 +75,7 @@ var round_start_msec := 0
 var input_events: Array[Dictionary] = []
 var used_odai_unique_lines: Array[String] = []
 var used_odai_line_order: Array[int] = []
-var ui_font_size := 25
+var ui_font_size := UI_FONT_BASE_SIZE
 var current_background_is_video := false
 var stream_version := 0
 var stream_reachability_cache: Dictionary = {}
@@ -906,24 +908,19 @@ func setup_font_size_spinbox() -> void:
 	if not has_ui_node("font_size_spinbox"):
 		return
 	var spin := ui_node("font_size_spinbox") as SpinBox
-	ui_font_size = 25
+	ui_font_size = UI_FONT_BASE_SIZE
 	spin.min_value = 8
 	spin.max_value = 500
 	spin.step = 1
-	# 起動時はシーン保存値に関わらず既定値(25)を適用する。
+	# 起動時はシーン保存値に関わらず既定値を適用する。
 	spin.value = ui_font_size
 	ui_font_size = int(spin.value)
 
-# 主要UIのフォントサイズを現在設定で更新する。
+# UI全体のフォントサイズを基準値に対する相対倍率で更新する。
 func apply_ui_font_size() -> void:
 	load_ui_font_resource()
-	var rich_targets := ["timer_label", "target_text2", "target_text", "measure_label", "layout_label", "odai_label", "countdown_label", "allow_miss_label", "font_size_label", "background_label"]
-	for name in rich_targets:
-		var n := ui_node(name)
-		if n is RichTextLabel:
-			(n as RichTextLabel).add_theme_font_size_override("normal_font_size", ui_font_size)
-
-	apply_ui_font_recursively(self )
+	var scale := float(ui_font_size) / float(UI_FONT_BASE_SIZE)
+	apply_ui_font_recursively(self , scale)
 
 # UIフォントをリソースから読み込む。主にWebでの日本語表示用。
 func load_ui_font_resource() -> void:
@@ -938,8 +935,8 @@ func load_ui_font_resource() -> void:
 			ui_font_resource = loaded as Font
 			return
 
-# 全Controlへフォントを再帰適用する。
-func apply_ui_font_recursively(node: Node) -> void:
+# 全Controlへフォントと相対サイズを再帰適用する。
+func apply_ui_font_recursively(node: Node, scale: float) -> void:
 	if ui_font_resource == null:
 		return
 	if node is Control:
@@ -947,8 +944,24 @@ func apply_ui_font_recursively(node: Node) -> void:
 		control.add_theme_font_override("font", ui_font_resource)
 		if control is RichTextLabel:
 			(control as RichTextLabel).add_theme_font_override("normal_font", ui_font_resource)
+		apply_control_font_size_overrides(control, scale)
 	for child in node.get_children():
-		apply_ui_font_recursively(child)
+		apply_ui_font_recursively(child, scale)
+
+# 各Controlが持つ既定サイズを保持し、倍率を掛けた値で上書きする。
+func apply_control_font_size_overrides(control: Control, scale: float) -> void:
+	for key in UI_FONT_SIZE_KEYS:
+		var theme_size := int(control.get_theme_font_size(String(key)))
+		if theme_size <= 0:
+			continue
+		var meta_key := "__base_%s" % String(key)
+		var base_size := theme_size
+		if control.has_meta(meta_key):
+			base_size = int(control.get_meta(meta_key))
+		else:
+			control.set_meta(meta_key, base_size)
+		var scaled_size := maxi(int(round(float(base_size) * scale)), 1)
+		control.add_theme_font_size_override(String(key), scaled_size)
 
 # 開始前カウントダウン秒数を返す。
 func get_countdown_sec() -> float:

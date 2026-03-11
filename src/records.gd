@@ -115,6 +115,7 @@ func _ready() -> void:
 	build_analytics_ui()
 	build_filter_dialog()
 	build_advanced_search_dialog()
+	request_main_font_refresh()
 	visibility_changed.connect(_on_visibility_changed)
 	set_process_unhandled_input(true)
 	update_records_shortcut_labels()
@@ -720,6 +721,13 @@ func refresh_records_list() -> void:
 		add_record_row(records[i])
 
 	add_pagination_block(total_records, all_records_count, total_pages, false)
+	request_main_font_refresh()
+
+# main.gd 側のフォント倍率再適用を要求する。
+func request_main_font_refresh() -> void:
+	var root := get_parent()
+	if root != null and root.has_method("apply_ui_font_size"):
+		root.call("apply_ui_font_size")
 
 # 総件数と1ページ件数から総ページ数を返す。
 func get_total_pages(total_records: int) -> int:
