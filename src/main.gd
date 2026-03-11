@@ -1339,20 +1339,25 @@ func setup_result_overlay() -> void:
 	backdrop.offset_bottom = 0.0
 	result_overlay.add_child(backdrop)
 
+	var center := CenterContainer.new()
+	center.anchor_left = 0.0
+	center.anchor_top = 0.0
+	center.anchor_right = 1.0
+	center.anchor_bottom = 1.0
+	center.offset_left = 12.0
+	center.offset_top = 12.0
+	center.offset_right = -12.0
+	center.offset_bottom = -12.0
+	result_overlay.add_child(center)
+
 	var panel := PanelContainer.new()
-	panel.anchor_left = 0.5
-	panel.anchor_top = 0.0
-	panel.anchor_right = 0.5
-	panel.anchor_bottom = 0.0
-	panel.offset_left = -260.0
-	panel.offset_top = 24.0
-	panel.offset_right = 260.0
-	panel.offset_bottom = 424.0
-	result_overlay.add_child(panel)
+	panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	center.add_child(panel)
 
 	var vbox := VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_theme_constant_override("separation", 6)
 	panel.add_child(vbox)
 
 	var title := Label.new()

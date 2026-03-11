@@ -96,6 +96,8 @@ var list_filter_inputs: Dictionary = {}
 var list_filter_dialog: AcceptDialog
 var list_advanced_dialog: AcceptDialog
 var list_advanced_query_edit: TextEdit
+var list_filter_button: Button
+var list_advanced_button: Button
 
 # 記録画面を初期化し、一覧/詳細UIを構築する。
 func _ready() -> void:
@@ -126,6 +128,16 @@ func update_records_shortcut_labels() -> void:
 			list_eval_button.text = "評価(A)"
 		else:
 			list_eval_button.text = "評価"
+	if list_filter_button != null:
+		if can_open_list_search_shortcut():
+			list_filter_button.text = "フィルタ(F)" if not has_active_list_filter() else "フィルタ*(F)"
+		else:
+			list_filter_button.text = "フィルタ" if not has_active_list_filter() else "フィルタ*"
+	if list_advanced_button != null:
+		if can_open_list_search_shortcut():
+			list_advanced_button.text = "高度な検索(S)" if list_advanced_query.strip_edges().is_empty() else "高度な検索*(S)"
+		else:
+			list_advanced_button.text = "高度な検索" if list_advanced_query.strip_edges().is_empty() else "高度な検索*"
 	if list_open_records_file_button != null:
 		list_open_records_file_button.text = "records.jsonlを開く"
 	if detail_back_button != null:
@@ -149,6 +161,22 @@ func can_open_analytics_by_shortcut() -> bool:
 	if detail_root != null and detail_root.visible:
 		return false
 	if analytics_root != null and analytics_root.visible:
+		return false
+	return true
+
+# 一覧表示中にフィルタ/高度な検索ショートカットを受け付けられるか返す。
+func can_open_list_search_shortcut() -> bool:
+	if not visible:
+		return false
+	if list_scroll == null or not list_scroll.visible:
+		return false
+	if detail_root != null and detail_root.visible:
+		return false
+	if analytics_root != null and analytics_root.visible:
+		return false
+	if list_filter_dialog != null and list_filter_dialog.visible:
+		return false
+	if list_advanced_dialog != null and list_advanced_dialog.visible:
 		return false
 	return true
 
@@ -249,11 +277,19 @@ func _unhandled_input(event: InputEvent) -> void:
 		if key_ev.keycode == KEY_A and not repeat:
 			_on_eval_button_pressed()
 			accept_event()
+			return
+		if key_ev.keycode == KEY_F and not repeat and can_open_list_search_shortcut():
+			_on_filter_button_pressed()
+			accept_event()
+			return
+		if key_ev.keycode == KEY_S and not repeat and can_open_list_search_shortcut():
+			_on_advanced_search_button_pressed()
+			accept_event()
 
 
 # 評価用UIを作成する。
 func build_analytics_ui() -> void:
-		analytics_root = Control.new()
+		analytics_root = VBoxContainer.new()
 		analytics_root.name = "analytics_root"
 		analytics_root.anchor_left = 0.0
 		analytics_root.anchor_top = 0.0
@@ -266,13 +302,9 @@ func build_analytics_ui() -> void:
 		analytics_root.visible = false
 		add_child(analytics_root)
 
-		var top_bar := HBoxContainer.new()
-		top_bar.anchor_left = 0.0
-		top_bar.anchor_top = 0.0
-		top_bar.anchor_right = 1.0
-		top_bar.anchor_bottom = 0.0
-		top_bar.offset_bottom = 32.0
+		var top_bar := HFlowContainer.new()
 		top_bar.add_theme_constant_override("separation", 8)
+		top_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		analytics_root.add_child(top_bar)
 
 		analytics_back_button = Button.new()
@@ -284,11 +316,8 @@ func build_analytics_ui() -> void:
 		top_bar.add_child(top_title)
 
 		var body_scroll := ScrollContainer.new()
-		body_scroll.anchor_left = 0.0
-		body_scroll.anchor_top = 0.0
-		body_scroll.anchor_right = 1.0
-		body_scroll.anchor_bottom = 1.0
-		body_scroll.offset_top = 36.0
+		body_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		body_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		analytics_root.add_child(body_scroll)
 
 		var body_vbox := VBoxContainer.new()
@@ -363,7 +392,7 @@ func build_list_ui() -> void:
 
 # 詳細用UIを作成する。
 func build_detail_ui() -> void:
-	detail_root = Control.new()
+	detail_root = VBoxContainer.new()
 	detail_root.name = "detail_root"
 	detail_root.anchor_left = 0.0
 	detail_root.anchor_top = 0.0
@@ -376,16 +405,9 @@ func build_detail_ui() -> void:
 	detail_root.visible = false
 	add_child(detail_root)
 
-	var top_bar := HBoxContainer.new()
-	top_bar.anchor_left = 0.0
-	top_bar.anchor_top = 0.0
-	top_bar.anchor_right = 1.0
-	top_bar.anchor_bottom = 0.0
-	top_bar.offset_left = 0.0
-	top_bar.offset_top = 0.0
-	top_bar.offset_right = 0.0
-	top_bar.offset_bottom = 32.0
+	var top_bar := HFlowContainer.new()
 	top_bar.add_theme_constant_override("separation", 8)
+	top_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	detail_root.add_child(top_bar)
 
 	detail_back_button = Button.new()
@@ -405,14 +427,8 @@ func build_detail_ui() -> void:
 	top_bar.add_child(detail_status_label)
 
 	var body_scroll := ScrollContainer.new()
-	body_scroll.anchor_left = 0.0
-	body_scroll.anchor_top = 0.0
-	body_scroll.anchor_right = 1.0
-	body_scroll.anchor_bottom = 1.0
-	body_scroll.offset_left = 0.0
-	body_scroll.offset_top = 36.0
-	body_scroll.offset_right = 0.0
-	body_scroll.offset_bottom = 0.0
+	body_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	detail_root.add_child(body_scroll)
 
 	var body_vbox := VBoxContainer.new()
@@ -717,9 +733,12 @@ func add_pagination_block(total_records: int, all_records_count: int, total_page
 		return
 
 	if include_page_size_form:
-		var config_row := HBoxContainer.new()
+		list_filter_button = null
+		list_advanced_button = null
+		var config_row := HFlowContainer.new()
 		config_row.add_theme_constant_override("separation", 8)
 		config_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		config_row.alignment = FlowContainer.ALIGNMENT_BEGIN
 
 		var page_size_label := Label.new()
 		page_size_label.text = "1ページ表示件数"
@@ -735,31 +754,28 @@ func add_pagination_block(total_records: int, all_records_count: int, total_page
 		page_size_spin.value_changed.connect(_on_page_size_changed)
 		config_row.add_child(page_size_spin)
 
-		var filter_button := Button.new()
-		filter_button.text = "フィルタ" if not has_active_list_filter() else "フィルタ*"
-		filter_button.pressed.connect(_on_filter_button_pressed)
-		config_row.add_child(filter_button)
+		list_filter_button = Button.new()
+		list_filter_button.pressed.connect(_on_filter_button_pressed)
+		config_row.add_child(list_filter_button)
 
-		var advanced_button := Button.new()
-		advanced_button.text = "高度な検索" if list_advanced_query.strip_edges().is_empty() else "高度な検索*"
-		advanced_button.pressed.connect(_on_advanced_search_button_pressed)
-		config_row.add_child(advanced_button)
+		list_advanced_button = Button.new()
+		list_advanced_button.pressed.connect(_on_advanced_search_button_pressed)
+		config_row.add_child(list_advanced_button)
 
 		var clear_button := Button.new()
 		clear_button.text = "条件クリア"
 		clear_button.pressed.connect(_on_clear_filter_button_pressed)
 		config_row.add_child(clear_button)
 
-		var spacer := Control.new()
-		spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		config_row.add_child(spacer)
-
 		var config_info := Label.new()
 		config_info.text = "表示%d件 / 全%d件  (%dページ)" % [total_records, all_records_count, total_pages]
 		if not list_filter_status_message.is_empty():
 			config_info.text += "  %s" % list_filter_status_message
+		config_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		config_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		config_row.add_child(config_info)
 		list_vbox.add_child(config_row)
+		update_records_shortcut_labels()
 
 	add_pagination_row(total_pages)
 
@@ -770,18 +786,28 @@ func add_pagination_block(total_records: int, all_records_count: int, total_page
 func build_filter_dialog() -> void:
 	list_filter_dialog = AcceptDialog.new()
 	list_filter_dialog.title = "フィルタ"
-	list_filter_dialog.min_size = Vector2i(720, 460)
+	list_filter_dialog.min_size = Vector2i(520, 300)
 	add_child(list_filter_dialog)
 	list_filter_dialog.confirmed.connect(_on_filter_dialog_confirmed)
+	list_filter_dialog.get_ok_button().text = "OK"
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.custom_minimum_size = Vector2(0, 240)
+	list_filter_dialog.add_child(scroll)
 
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 6)
-	list_filter_dialog.add_child(root)
+	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.add_child(root)
 
 	var grid := GridContainer.new()
-	grid.columns = 4
+	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 8)
 	grid.add_theme_constant_override("v_separation", 6)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	root.add_child(grid)
 
 	add_filter_input_pair(grid, "日時(開始)", "date_from")
@@ -810,14 +836,27 @@ func build_filter_dialog() -> void:
 func build_advanced_search_dialog() -> void:
 	list_advanced_dialog = AcceptDialog.new()
 	list_advanced_dialog.title = "高度な検索"
-	list_advanced_dialog.dialog_text = "AND/OR で文字列条件を組み合わせます。"
-	list_advanced_dialog.min_size = Vector2i(720, 280)
+	list_advanced_dialog.min_size = Vector2i(520, 260)
 	add_child(list_advanced_dialog)
 	list_advanced_dialog.confirmed.connect(_on_advanced_search_confirmed)
+	list_advanced_dialog.get_ok_button().text = "OK"
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.custom_minimum_size = Vector2(0, 180)
+	list_advanced_dialog.add_child(scroll)
 
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 8)
-	list_advanced_dialog.add_child(root)
+	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.add_child(root)
+
+	var desc := Label.new()
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.text = "自由語句の検索と、項目比較条件を AND/OR で組み合わせられます。"
+	root.add_child(desc)
 
 	list_advanced_query_edit = TextEdit.new()
 	list_advanced_query_edit.custom_minimum_size = Vector2(0, 140)
@@ -826,7 +865,7 @@ func build_advanced_search_dialog() -> void:
 
 	var hint := Label.new()
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.text = "例: 2026-03-01 AND qwerty OR \"test_jp.txt\" AND miss\n対象は日時/お題/配列/数値などを1行文字列化した内容です。AND が OR より優先されます。"
+	hint.text = "使い方:\n1) 自由語句: qwerty AND test_jp\n2) 数値比較: score>=300 AND miss<10 AND miss_per>2.5\n3) 文字列項目: odai:default AND layout:qwerty\n4) 日時比較: date>=2026-03-01\n対応キー: score, sec, sps, typed, miss, miss_per, date, odai, layout\n演算子: >, >=, <, <=, =, !=\nAND が OR より優先されます。"
 	root.add_child(hint)
 
 # フィルタ入力ラベル+フォームを1組追加する。
@@ -848,7 +887,7 @@ func _on_filter_button_pressed() -> void:
 		var input := list_filter_inputs[key] as LineEdit
 		if input != null:
 			input.text = String(list_filter_state.get(String(key), ""))
-	list_filter_dialog.popup_centered_ratio(0.7)
+	popup_dialog_with_auto_size(list_filter_dialog, Vector2i(520, 300), 0.86)
 
 # 高度な検索ボタン押下でダイアログを開く。
 func _on_advanced_search_button_pressed() -> void:
@@ -856,7 +895,22 @@ func _on_advanced_search_button_pressed() -> void:
 		return
 	if list_advanced_query_edit != null:
 		list_advanced_query_edit.text = list_advanced_query
-	list_advanced_dialog.popup_centered_ratio(0.6)
+	popup_dialog_with_auto_size(list_advanced_dialog, Vector2i(560, 260), 0.76)
+
+# ダイアログを初回表示でも崩れにくいサイズで中央表示する。
+func popup_dialog_with_auto_size(dialog: AcceptDialog, minimum_size: Vector2i, ratio: float) -> void:
+	if dialog == null:
+		return
+	dialog.reset_size()
+	var viewport_size := get_viewport_rect().size
+	var max_w := maxi(300, int(floor(viewport_size.x * ratio)))
+	var max_h := maxi(220, int(floor(viewport_size.y * ratio)))
+	var content_min := dialog.get_contents_minimum_size()
+	var desired_w := maxi(minimum_size.x, int(ceil(content_min.x)) + 32)
+	var desired_h := maxi(minimum_size.y, int(ceil(content_min.y)) + 64)
+	var target_w := mini(desired_w, max_w)
+	var target_h := mini(desired_h, max_h)
+	dialog.popup_centered(Vector2i(target_w, target_h))
 
 # フィルタ確定時に状態を保存して一覧を更新する。
 func _on_filter_dialog_confirmed() -> void:
@@ -895,9 +949,10 @@ func add_pagination_row(total_pages: int) -> void:
 	if list_vbox == null:
 		return
 
-	var row := HBoxContainer.new()
+	var row := HFlowContainer.new()
 	row.add_theme_constant_override("separation", 4)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.alignment = FlowContainer.ALIGNMENT_CENTER
 
 	var pages := build_visible_pages(total_pages)
 	for page in pages:
@@ -933,7 +988,7 @@ func unique_sorted_pages(pages: Array[int]) -> Array[int]:
 	return out
 
 # 1つのページボタンを追加する。現在ページは強調表示する。
-func add_page_button(row: HBoxContainer, page: int) -> void:
+func add_page_button(row: Control, page: int) -> void:
 	var button := Button.new()
 	button.focus_mode = Control.FOCUS_NONE
 	if page == list_current_page:
@@ -1148,7 +1203,7 @@ func matches_advanced_query(rec: Dictionary, query: String) -> bool:
 	if terms.is_empty():
 		return true
 
-	var haystack := build_record_search_text(rec)
+	var ctx := build_record_search_context(rec)
 	var groups: Array[Array] = []
 	var current_group: Array = []
 
@@ -1173,12 +1228,158 @@ func matches_advanced_query(rec: Dictionary, query: String) -> bool:
 	for group in groups:
 		var all_ok := true
 		for word in group:
-			if haystack.find(String(word)) < 0:
+			if not token_matches_record_context(String(word), ctx):
 				all_ok = false
 				break
 		if all_ok:
 			return true
 	return false
+
+# 高度な検索トークンがレコード条件に一致するか判定する。
+func token_matches_record_context(token: String, ctx: Dictionary) -> bool:
+	var raw := token.strip_edges()
+	if raw.is_empty():
+		return true
+
+	var cond := parse_advanced_condition(raw)
+	if cond.is_empty():
+		var haystack := String(ctx.get("search_text", ""))
+		return haystack.find(raw.to_lower()) >= 0
+
+	var key := String(cond.get("key", "")).to_lower()
+	var op := String(cond.get("op", ""))
+	var rhs := String(cond.get("rhs", "")).strip_edges()
+	if rhs.is_empty():
+		return true
+
+	var resolved_key := normalize_advanced_key(key)
+	if resolved_key.is_empty():
+		var haystack2 := String(ctx.get("search_text", ""))
+		return haystack2.find(raw.to_lower()) >= 0
+
+	if is_numeric_advanced_key(resolved_key):
+		if not rhs.is_valid_float() and not rhs.is_valid_int():
+			return false
+		var lhs_num := float(ctx.get(resolved_key, 0.0))
+		var rhs_num := float(rhs)
+		return compare_numeric_condition(lhs_num, rhs_num, op)
+
+	var lhs_text := String(ctx.get(resolved_key, "")).to_lower()
+	var rhs_text := rhs.to_lower()
+	if op == ":":
+		return lhs_text.find(rhs_text) >= 0
+	return compare_text_condition(lhs_text, rhs_text, op)
+
+# 高度な検索トークンを key/op/rhs へ分解する。条件式でなければ空辞書を返す。
+func parse_advanced_condition(token: String) -> Dictionary:
+	var ops := [">=", "<=", "!=", ">", "<", "=", ":"]
+	for opv in ops:
+		var op := String(opv)
+		var idx := token.find(op)
+		if idx <= 0:
+			continue
+		var key := token.substr(0, idx).strip_edges()
+		var rhs := token.substr(idx + op.length()).strip_edges()
+		if key.is_empty() or rhs.is_empty():
+			return {}
+		return {"key": key, "op": op, "rhs": rhs}
+	return {}
+
+# 高度な検索キーの別名を正規化する。
+func normalize_advanced_key(key: String) -> String:
+	match key.to_lower():
+		"score":
+			return "score"
+		"sec", "seconds", "time":
+			return "sec"
+		"sps", "score_per", "score_per_sec":
+			return "sps"
+		"typed", "chars", "typed_chars":
+			return "typed"
+		"miss", "miss_count":
+			return "miss"
+		"miss_per", "miss_rate":
+			return "miss_per"
+		"date", "created", "created_at":
+			return "date"
+		"odai", "odai_name":
+			return "odai"
+		"layout", "layout_name":
+			return "layout"
+		_:
+			return ""
+
+# 数値比較対象キーかを返す。
+func is_numeric_advanced_key(key: String) -> bool:
+	return key == "score" or key == "sec" or key == "sps" or key == "typed" or key == "miss" or key == "miss_per"
+
+# 数値比較演算子を評価する。
+func compare_numeric_condition(lhs: float, rhs: float, op: String) -> bool:
+	match op:
+		">":
+			return lhs > rhs
+		">=":
+			return lhs >= rhs
+		"<":
+			return lhs < rhs
+		"<=":
+			return lhs <= rhs
+		"=":
+			return is_equal_approx(lhs, rhs)
+		"!=":
+			return not is_equal_approx(lhs, rhs)
+		_:
+			return false
+
+# 文字列比較演算子を評価する。
+func compare_text_condition(lhs: String, rhs: String, op: String) -> bool:
+	match op:
+		"=":
+			return lhs == rhs
+		"!=":
+			return lhs != rhs
+		">":
+			return lhs > rhs
+		">=":
+			return lhs >= rhs
+		"<":
+			return lhs < rhs
+		"<=":
+			return lhs <= rhs
+		_:
+			return false
+
+# レコードを高度な検索評価用コンテキストへ変換する。
+func build_record_search_context(rec: Dictionary) -> Dictionary:
+	var created_at := String(rec.get("created_at", ""))
+	var score := int(rec.get("score", 0))
+	var typed := int(rec.get("typed_chars", 0))
+	var miss := int(rec.get("miss_count", 0))
+	var seconds := get_record_seconds(rec)
+	var sps := 0.0
+	if seconds > 0.0:
+		sps = float(score) / seconds
+	var miss_rate := 0.0
+	if typed > 0:
+		miss_rate = (float(miss) / float(typed)) * 100.0
+
+	var odai_path := String(rec.get("odai_path", ""))
+	var layout_path := String(rec.get("layout_path", ""))
+	var odai_name := odai_path.get_file()
+	var layout_name := layout_path.get_file()
+
+	return {
+		"search_text": build_record_search_text(rec),
+		"score": float(score),
+		"sec": seconds,
+		"sps": sps,
+		"typed": float(typed),
+		"miss": float(miss),
+		"miss_per": miss_rate,
+		"date": created_at,
+		"odai": odai_name,
+		"layout": layout_name,
+	}
 
 # 高度な検索のトークン列を作る。"quoted phrase" に対応する。
 func tokenize_advanced_query(query: String) -> Array[String]:
